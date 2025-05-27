@@ -121,6 +121,11 @@ add_subdirectory(libv4l2cpp EXCLUDE_FROM_ALL)
 target_include_directories(libv4l2rtspserver PUBLIC libv4l2cpp/inc)
 target_link_libraries (libv4l2rtspserver PUBLIC libv4l2cpp ${LIBRARIES}) 
 
+# v4l2compress - utility for frame capture and format conversion
+add_executable(v4l2compress libv4l2cpp/main.cpp)
+target_link_libraries(v4l2compress libv4l2cpp ${LIBRARIES})
+target_include_directories(v4l2compress PUBLIC libv4l2cpp/inc)
+
 # static link of stdc++ if available
 if (STATICSTDCPP)
   include(CheckCXXCompilerFlag)
@@ -153,6 +158,7 @@ endif (SYSTEMD_FOUND)
 
 # package
 install (TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+install (TARGETS v4l2compress RUNTIME DESTINATION bin)
 install (FILES index.html DESTINATION share/${PROJECT_NAME}/)
 install (FILES hls.js DESTINATION share/${PROJECT_NAME}/)
 
