@@ -43,7 +43,7 @@ jobs:
             arch: "armv6"
             cc: "arm-linux-gnueabi-gcc"
             cxx: "arm-linux-gnueabi-g++"
-            cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=softfp -O2 -g0 -DNDEBUG"
+            cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=soft -O2 -g0 -DNDEBUG"
             target: "pi-zero"
             description: "Raspberry Pi Zero/Zero W"
             parallel_jobs: "2"
