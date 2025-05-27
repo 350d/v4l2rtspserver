@@ -104,6 +104,14 @@ bool SnapshotManager::initializeWithDevice(const std::string& primaryDevice) {
         return true;
     }
     
+    // Even for H264-only devices, try to find any MJPEG device for snapshots
+    LOG(INFO) << "Primary device doesn't support MJPEG, searching for any MJPEG device...";
+    if (tryInitializeMJPEGDevice(primaryDevice)) {
+        m_mode = SnapshotMode::MJPEG_DEVICE;
+        LOG(NOTICE) << "Snapshot mode: Separate MJPEG device (" << m_mjpegDevicePath << ")";
+        return true;
+    }
+    
     // Fallback to info snapshots for H264-only devices
     m_mode = SnapshotMode::H264_FALLBACK;
     LOG(NOTICE) << "Snapshot mode: H264 fallback (info snapshots only)";
@@ -296,22 +304,6 @@ void SnapshotManager::processH264KeyframeWithSPS(const unsigned char* h264Data, 
         if (captureMJPEGSnapshot()) {
             return; // Successfully captured real MJPEG snapshot
         }
-    }
-    
-    // For MJPEG_STREAM mode, try to find and use a separate MJPEG device
-    if (m_mode == SnapshotMode::MJPEG_STREAM) {
-        // Try to initialize MJPEG device on first H264 keyframe
-        if (tryInitializeMJPEGDevice(m_primaryDevicePath)) {
-            m_mode = SnapshotMode::MJPEG_DEVICE;
-            LOG(NOTICE) << "Upgraded to MJPEG device mode for real snapshots";
-            if (captureMJPEGSnapshot()) {
-                return; // Successfully captured real MJPEG snapshot
-            }
-        }
-        
-        // If no MJPEG device available, create informational snapshot instead of MP4
-        createH264InfoSnapshot(dataSize, width, height);
-        return;
     }
     
     // Only create MP4 snapshots if explicitly in H264_MP4 mode
