@@ -22,6 +22,13 @@
 
 #include <sstream>
 
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/videodev2.h>
+#endif
+
 // libv4l2
 #include <linux/videodev2.h>
 
@@ -64,6 +71,34 @@ std::string getDeviceName(const std::string & devicePath)
 		deviceName.erase(0,pos+1);
 	}
 	return deviceName;
+}
+
+// Helper function to get supported formats for a device
+std::list<unsigned int> getDeviceSupportedFormats(const std::string& devicePath) {
+	std::list<unsigned int> formatList;
+	
+#ifdef __linux__
+	int fd = open(devicePath.c_str(), O_RDONLY);
+	if (fd < 0) {
+		LOG(ERROR) << "Cannot open device:" << devicePath << " " << strerror(errno);
+		return formatList;
+	}
+	
+	struct v4l2_fmtdesc fmt;
+	memset(&fmt, 0, sizeof(fmt));
+	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	
+	for (fmt.index = 0; ioctl(fd, VIDIOC_ENUM_FMT, &fmt) == 0; fmt.index++) {
+		LOG(DEBUG) << "Supported format " << fmt.index << ": " << V4l2Device::fourcc(fmt.pixelformat) << " (" << fmt.description << ")";
+		formatList.push_back(fmt.pixelformat);
+	}
+	
+	close(fd);
+#else
+	LOG(WARN) << "Format detection not available on this platform";
+#endif
+	
+	return formatList;
 }
 
 		
@@ -283,7 +318,7 @@ int main(int argc, char** argv)
 		decodeDevice(firstDevice, videoDev, audioDev);
 		
 		// Get supported formats from the actual device
-		std::list<unsigned int> deviceSupportedFormats = V4l2Device::getSupportedFormats(videoDev);
+		std::list<unsigned int> deviceSupportedFormats = getDeviceSupportedFormats(videoDev);
 		
 		// Define our preferred format order
 		std::list<unsigned int> preferredFormats = {
