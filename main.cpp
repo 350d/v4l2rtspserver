@@ -22,13 +22,6 @@
 
 #include <sstream>
 
-#ifdef __linux__
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <linux/videodev2.h>
-#endif
-
 // libv4l2
 #include <linux/videodev2.h>
 
@@ -71,34 +64,6 @@ std::string getDeviceName(const std::string & devicePath)
 		deviceName.erase(0,pos+1);
 	}
 	return deviceName;
-}
-
-// Helper function to get supported formats for a device
-std::list<unsigned int> getDeviceSupportedFormats(const std::string& devicePath) {
-	std::list<unsigned int> formatList;
-	
-#ifdef __linux__
-	int fd = open(devicePath.c_str(), O_RDONLY);
-	if (fd < 0) {
-		LOG(ERROR) << "Cannot open device:" << devicePath << " " << strerror(errno);
-		return formatList;
-	}
-	
-	struct v4l2_fmtdesc fmt;
-	memset(&fmt, 0, sizeof(fmt));
-	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	
-	for (fmt.index = 0; ioctl(fd, VIDIOC_ENUM_FMT, &fmt) == 0; fmt.index++) {
-		LOG(DEBUG) << "Supported format " << fmt.index << ": " << V4l2Device::fourcc(fmt.pixelformat) << " (" << fmt.description << ")";
-		formatList.push_back(fmt.pixelformat);
-	}
-	
-	close(fd);
-#else
-	LOG(WARN) << "Format detection not available on this platform";
-#endif
-	
-	return formatList;
 }
 
 		
@@ -309,49 +274,11 @@ int main(int argc, char** argv)
 	
 	// default format tries
 	if ((videoformatList.empty()) && (format!=0)) {
-		// Get supported formats for the first device
-		std::string firstDevice = devList.empty() ? dev_name : devList.front();
-		
-		// Extract video device path if it contains ALSA part
-		std::string videoDev;
-		std::string audioDev;
-		decodeDevice(firstDevice, videoDev, audioDev);
-		
-		// Get supported formats from the actual device
-		std::list<unsigned int> deviceSupportedFormats = getDeviceSupportedFormats(videoDev);
-		
-		// Define our preferred format order
-		std::list<unsigned int> preferredFormats = {
-			V4L2_PIX_FMT_H264,    // H264 is most common and efficient
-			V4L2_PIX_FMT_HEVC,    // HEVC/H265 if available
-			V4L2_PIX_FMT_MJPEG,   // MJPEG for compatibility
-			V4L2_PIX_FMT_JPEG,    // Plain JPEG
-			V4L2_PIX_FMT_NV12     // Raw format fallback
-		};
-		
-		// Add only supported formats in preferred order
-		for (unsigned int preferredFormat : preferredFormats) {
-			for (unsigned int supportedFormat : deviceSupportedFormats) {
-				if (preferredFormat == supportedFormat) {
-					videoformatList.push_back(preferredFormat);
-					break;
-				}
-			}
-		}
-		
-		// If no supported formats found, use the old default list as fallback
-		if (videoformatList.empty()) {
-			LOG(WARN) << "Could not detect supported formats for device " << videoDev << ", using default list";
-			videoformatList.push_back(V4L2_PIX_FMT_H264);
-			videoformatList.push_back(V4L2_PIX_FMT_MJPEG);
-			videoformatList.push_back(V4L2_PIX_FMT_JPEG);
-			videoformatList.push_back(V4L2_PIX_FMT_NV12);
-		} else {
-			LOG(INFO) << "Using device-supported formats for " << videoDev;
-			for (unsigned int fmt : videoformatList) {
-				LOG(INFO) << "  - " << V4l2Device::fourcc(fmt);
-			}
-		}
+		videoformatList.push_back(V4L2_PIX_FMT_H264);
+		videoformatList.push_back(V4L2_PIX_FMT_HEVC);
+		videoformatList.push_back(V4L2_PIX_FMT_MJPEG);
+		videoformatList.push_back(V4L2_PIX_FMT_JPEG);
+		videoformatList.push_back(V4L2_PIX_FMT_NV12);
 	}
 
 #ifdef HAVE_ALSA	
