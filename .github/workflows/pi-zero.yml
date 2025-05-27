@@ -95,9 +95,10 @@ jobs:
       uses: actions/cache@v4
       with:
         path: |
-          /var/cache/apt/archives
-          /var/lib/apt/lists
-        key: apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v2
+          /var/cache/apt/archives/*.deb
+          /var/lib/apt/lists/*_Packages
+          /var/lib/apt/lists/*_Release
+        key: apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v3
         restore-keys: |
           apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-
           apt-cache-${{ matrix.config.arch }}-
@@ -132,9 +133,11 @@ jobs:
         
         echo "✅ Cross-compilation tools installed"
         
-        # Clean up to reduce cache size
-        sudo apt-get clean
-        sudo rm -rf /var/lib/apt/lists/*
+        # Clean up to reduce cache size, but preserve cached files
+        sudo apt-get autoclean
+        # Remove only temporary files, keep .deb packages and package lists for caching
+        sudo find /var/cache/apt/archives -name "*.deb" -type f -exec touch {} \; 2>/dev/null || true
+        sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/cache/apt/archives/partial
 
     - name: ⚙️ Configure Build Environment
       run: |
