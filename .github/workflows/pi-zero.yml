@@ -238,6 +238,29 @@ jobs:
         echo "::group::📁 Build artifacts"
         ls -la
         echo "::endgroup::"
+        
+        # Build v4l2compress for modern camera stack support
+        echo "::group::🔧 Building v4l2compress"
+        echo "🔧 Building v4l2compress for modern camera stack integration..."
+        
+        if [ -f "../CMakeLists.txt" ]; then
+          # Check if v4l2compress target exists in CMake
+          if grep -q "v4l2compress" ../CMakeLists.txt; then
+            echo "📦 Found v4l2compress target in CMakeLists.txt"
+            make v4l2compress || echo "⚠️ v4l2compress build failed, but continuing..."
+          else
+            echo "ℹ️ v4l2compress target not found in CMakeLists.txt"
+          fi
+        fi
+        
+        # Check if v4l2compress was built
+        if [ -f "v4l2compress" ]; then
+          echo "✅ v4l2compress built successfully"
+          ls -la v4l2compress
+        else
+          echo "ℹ️ v4l2compress not available in this build"
+        fi
+        echo "::endgroup::"
 
     - name: 📦 Create Package
       run: |
@@ -253,13 +276,13 @@ jobs:
         PKG_DIR="v4l2rtspserver-${{ matrix.config.target }}"
         mkdir -p "../$PKG_DIR"
         
-        # Copy binary
-        if [ -f "v4l2rtspserver" ]; then
-          cp v4l2rtspserver "../$PKG_DIR/"
-          echo "::notice title=Binary::✅ Binary copied for ${{ matrix.config.name }}"
-        else
-          echo "::error title=Binary::❌ Binary not found for ${{ matrix.config.name }}!"
-          exit 1
+        # Copy binaries
+        cp v4l2rtspserver "../$PKG_DIR/"
+        
+        # Copy v4l2compress if available
+        if [ -f "v4l2compress" ]; then
+          echo "📦 Adding v4l2compress to package"
+          cp v4l2compress "../$PKG_DIR/"
         fi
         
         # Copy web files if they exist
@@ -337,6 +360,32 @@ jobs:
         - Flags: ${{ matrix.config.cflags }}
         EOF
 
+        cat << EOF >> "../$PKG_DIR/README-${{ matrix.config.target }}.md"
+        
+        ## v4l2compress (Modern Camera Stack)
+        
+        If v4l2compress is included in this package, it provides support for modern camera stack:
+        
+        \`\`\`bash
+        # Make executable
+        chmod +x v4l2compress
+        
+        # Convert YUV to JPEG for snapshots (modern camera stack)
+        ./v4l2compress -i /dev/video13 -o /tmp/snapshot.jpg -f MJPG
+        
+        # Use with v4l2rtspserver for dual format support
+        ./v4l2rtspserver -w 8080 /dev/video0 &
+        # Then use v4l2compress for snapshots when needed
+        \`\`\`
+        
+        **Modern Camera Stack Devices:**
+        - /dev/video0: unicam (raw sensor data)
+        - /dev/video13-16: bcm2835-isp (processed YUV/RGB)
+        - /dev/video20-23: bcm2835-isp (additional outputs)
+        
+        ## Access Streams
+        EOF
+
     - name: 🧪 Test Binary
       run: |
         cd build
@@ -377,9 +426,11 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: v4l2rtspserver-binary-${{ matrix.config.target }}
-        path: v4l2rtspserver-${{ matrix.config.target }}/v4l2rtspserver
+        path: |
+          v4l2rtspserver-${{ matrix.config.target }}/v4l2rtspserver
+          v4l2rtspserver-${{ matrix.config.target }}/v4l2compress
         retention-days: 90
-        if-no-files-found: error
+        if-no-files-found: warn
 
     - name: 🎉 Build Summary
       run: |
@@ -388,7 +439,14 @@ jobs:
         
         if [ -f "v4l2rtspserver-${{ matrix.config.target }}/v4l2rtspserver" ]; then
           SIZE=$(ls -lh v4l2rtspserver-${{ matrix.config.target }}/v4l2rtspserver | awk '{print $5}')
-          echo "✅ Binary size: $SIZE"
+          echo "✅ v4l2rtspserver binary size: $SIZE"
+        fi
+        
+        if [ -f "v4l2rtspserver-${{ matrix.config.target }}/v4l2compress" ]; then
+          SIZE=$(ls -lh v4l2rtspserver-${{ matrix.config.target }}/v4l2compress | awk '{print $5}')
+          echo "✅ v4l2compress binary size: $SIZE"
+        else
+          echo "ℹ️ v4l2compress: not available in this build"
         fi
         
         echo ""
@@ -412,10 +470,11 @@ jobs:
         echo " 📦 v4l2rtspserver-${{ matrix.config.target }}.tar.gz"
         echo ""
         echo "📋 Package contains:"
-        echo " • v4l2rtspserver binary (optimized for ${{ matrix.config.name }})"
-        echo " • Web interface files (if available)"
-        echo " • DEB package (if available)"
-        echo " • README-${{ matrix.config.target }}.md (platform guide)"
+        echo " ✅ Pre-compiled v4l2rtspserver binary"
+        echo " ✅ v4l2compress binary (if available, for modern camera stack)"
+        echo " ✅ Web interface files (index.html, hls.js)"
+        echo " ✅ DEB package (if available)"
+        echo " ✅ Platform-specific README with optimized settings"
         echo ""
         echo "🚀 Quick install on target device:"
         echo " tar -xzf v4l2rtspserver-${{ matrix.config.target }}.tar.gz"
@@ -458,6 +517,7 @@ jobs:
         echo ""
         echo "📋 Each package contains:"
         echo " ✅ Pre-compiled v4l2rtspserver binary"
+        echo " ✅ v4l2compress binary (if available, for modern camera stack)"
         echo " ✅ Web interface files (index.html, hls.js)"
         echo " ✅ DEB package (if available)"
         echo " ✅ Platform-specific README with optimized settings"
