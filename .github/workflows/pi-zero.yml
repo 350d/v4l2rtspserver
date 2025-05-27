@@ -1,38 +1,54 @@
-name: Raspberry Pi Zero
+name: 🚀 Raspberry Pi Cross-Compilation Matrix
 
 on:
   push:
     branches: [ master, main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ master, main ]
-  release:
-    types: [ published ]
+  workflow_dispatch:
 
 env:
   BUILD_TYPE: Release
 
 jobs:
-  build-pi-zero:
+  cross-compile-pi:
+    name: "⚙️ ${{ matrix.config.name }}"
     runs-on: ubuntu-latest
+    
     strategy:
+      fail-fast: false
       matrix:
-        include:
-        - buildtype: Debug
-          system: armv6l
-          crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-march=armv6 -mfpu=vfp -mfloat-abi=hard"
-          description: "Raspberry Pi Zero (Debug)"
-          
-        - buildtype: Release  
-          system: armv6l
-          crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-march=armv6 -mfpu=vfp -mfloat-abi=hard"
-          description: "Raspberry Pi Zero (Release)"
-
-    name: Build for ${{ matrix.description }}
+        config:
+          # Raspberry Pi Zero/Zero W (ARMv6)
+          - name: "Pi Zero"
+            arch: "armv6"
+            cc: "arm-linux-gnueabi-gcc"
+            cxx: "arm-linux-gnueabi-g++"
+            cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=softfp -O2"
+            target: "pi-zero"
+            description: "Raspberry Pi Zero/Zero W"
+            
+          # Raspberry Pi 3/4 (ARMv7)
+          - name: "Pi 3/4"
+            arch: "armv7"
+            cc: "arm-linux-gnueabihf-gcc"
+            cxx: "arm-linux-gnueabihf-g++"
+            cflags: "-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard -O2"
+            target: "pi3-4"
+            description: "Raspberry Pi 3/4 32-bit"
+            
+          # ARM64/AArch64 (Pi 4 64-bit, etc.)
+          - name: "ARM64"
+            arch: "aarch64"
+            cc: "aarch64-linux-gnu-gcc"
+            cxx: "aarch64-linux-gnu-g++"
+            cflags: "-march=armv8-a -O2"
+            target: "arm64"
+            description: "ARM64/AArch64 64-bit"
 
     steps:
-    - name: Checkout repository
+    - name: 📥 Checkout Repository
       run: |
         echo "Cloning repository..."
         git clone --depth=1 ${{ github.server_url }}/${{ github.repository }}.git .
@@ -51,94 +67,97 @@ jobs:
         echo "Repository cloned successfully"
         ls -la
 
-    - name: Install dependencies
+    - name: 🛠️ Install Cross-Compilation Tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          ca-certificates \
-          xz-utils \
-          cmake \
-          make \
-          pkg-config \
-          git \
-          g++-${{ matrix.crosscompiler }} \
-          gcc-${{ matrix.crosscompiler }}
         
-        # Try to install soft-float compiler as fallback
-        sudo apt-get install -y --no-install-recommends \
-          g++-arm-linux-gnueabi \
-          gcc-arm-linux-gnueabi || echo "Soft-float compiler not available"
+        if [ "${{ matrix.config.arch }}" = "aarch64" ]; then
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+        else
+          sudo apt-get install -y \
+            gcc-arm-linux-gnueabi \
+            g++-arm-linux-gnueabi \
+            gcc-arm-linux-gnueabihf \
+            g++-arm-linux-gnueabihf \
+            libc6-dev-armhf-cross \
+            libc6-armel-cross \
+            libc6-dev-armel-cross
+        fi
+        
+        sudo apt-get install -y build-essential cmake pkg-config
 
-    - name: Configure CMake for Pi Zero
+    - name: ⚙️ Configure Build Environment
+      run: |
+        # Set compiler variables
+        echo "CC=${{ matrix.config.cc }}" >> $GITHUB_ENV
+        echo "CXX=${{ matrix.config.cxx }}" >> $GITHUB_ENV
+        
+        # Set correct strip command based on architecture
+        if [ "${{ matrix.config.arch }}" = "aarch64" ]; then
+          echo "STRIP=aarch64-linux-gnu-strip" >> $GITHUB_ENV
+        elif [ "${{ matrix.config.arch }}" = "armv6" ]; then
+          echo "STRIP=arm-linux-gnueabi-strip" >> $GITHUB_ENV
+        else
+          echo "STRIP=arm-linux-gnueabihf-strip" >> $GITHUB_ENV
+        fi
+        
+        # Set compilation flags with warning suppression
+        WARNING_FLAGS="-Wno-format -Wno-format-overflow -Wno-format-security"
+        FULL_FLAGS="${{ matrix.config.cflags }} $WARNING_FLAGS"
+        echo "CFLAGS=$FULL_FLAGS" >> $GITHUB_ENV
+        echo "CXXFLAGS=$FULL_FLAGS" >> $GITHUB_ENV
+        
+        # Test compiler
+        echo 'int main(){return 0;}' > test_compile.c
+        if ${{ matrix.config.cc }} $FULL_FLAGS test_compile.c -o test_compile; then
+          echo "✅ Compiler test successful for ${{ matrix.config.name }}"
+          file test_compile
+        else
+          echo "❌ Compiler test failed for ${{ matrix.config.name }}"
+          exit 1
+        fi
+        rm -f test_compile.c test_compile
+
+    - name: 🔧 Configure CMake
       run: |
         mkdir -p build
         cd build
         
-        echo "🔧 Configuring CMake for Raspberry Pi Zero ARMv6..."
-        echo "Compiler flags: ${{ matrix.cmake_flags }}"
-        
-        # Check if soft-float compiler is available and use it if hard-float fails
-        COMPILER="${{ matrix.crosscompiler }}-gcc"
-        CXX_COMPILER="${{ matrix.crosscompiler }}-g++"
-        FLAGS="${{ matrix.cmake_flags }}"
-        
-        # Test compiler with simple program
-        echo 'int main(){return 0;}' > test_compile.c
-        if ! $COMPILER $FLAGS test_compile.c -o test_compile 2>/dev/null; then
-          echo "❌ Hard-float compiler failed, trying soft-float alternative..."
-          if command -v arm-linux-gnueabi-gcc > /dev/null; then
-            COMPILER="arm-linux-gnueabi-gcc" 
-            CXX_COMPILER="arm-linux-gnueabi-g++"
-            FLAGS="-march=armv6 -mfloat-abi=soft"
-            echo "✅ Using soft-float compiler: $COMPILER"
-            echo "✅ Using soft-float flags: $FLAGS"
-          else
-            echo "❌ No compatible compiler found!"
-            exit 1
-          fi
-        else
-          echo "✅ Hard-float compiler working: $COMPILER"
-        fi
-        rm -f test_compile.c test_compile
-        
-        # Add warning suppression flags for live555 library
-        WARNING_FLAGS="-Wno-format -Wno-format-overflow -Wno-format-security"
-        FLAGS="$FLAGS $WARNING_FLAGS"
-        
-        # Save actual compiler and flags for testing
-        echo "ACTUAL_COMPILER=$COMPILER" >> $GITHUB_ENV
-        echo "ACTUAL_FLAGS=$FLAGS" >> $GITHUB_ENV
+        echo "🔧 Configuring CMake for ${{ matrix.config.description }}..."
         
         cmake \
-          -DCMAKE_BUILD_TYPE=${{ matrix.buildtype }} \
+          -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_SYSTEM_NAME=Linux \
-          -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.system }} \
-          -DCMAKE_C_COMPILER=$COMPILER \
-          -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
-          -DCMAKE_C_FLAGS="$FLAGS" \
-          -DCMAKE_CXX_FLAGS="$FLAGS" \
+          -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.config.arch }} \
+          -DCMAKE_C_COMPILER=${{ env.CC }} \
+          -DCMAKE_CXX_COMPILER=${{ env.CXX }} \
+          -DCMAKE_C_FLAGS="${{ env.CFLAGS }}" \
+          -DCMAKE_CXX_FLAGS="${{ env.CXXFLAGS }}" \
           -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
           -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
           -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
           -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
-          -DCMAKE_FIND_ROOT_PATH=/usr/${{ matrix.crosscompiler }} \
           -DWITH_SSL=OFF \
           -DALSA=OFF \
           -DSTATICSTDCPP=ON \
           ..
 
-    - name: Build
+    - name: 🏗️ Build
       run: |
         cd build
-        echo "::notice title=Building::🏗️ Building v4l2rtspserver for Pi Zero..."
+        echo "::notice title=Building::🏗️ Building v4l2rtspserver for ${{ matrix.config.description }}..."
         make -j$(nproc)
+        
         echo "::group::📁 Build artifacts"
         ls -la
         echo "::endgroup::"
 
-    - name: Create package
+    - name: 📦 Create Package
       run: |
-        cd build  
+        cd build
         
         # Try to create DEB package
         echo "::group::📦 Creating DEB package"
@@ -146,157 +165,199 @@ jobs:
         ls -la *.deb 2>/dev/null || echo "No DEB packages found"
         echo "::endgroup::"
         
-        # Prepare artifacts directory
-        mkdir -p ../artifacts
+        # Create package directory
+        PKG_DIR="v4l2rtspserver-${{ matrix.config.target }}"
+        mkdir -p "../$PKG_DIR"
         
-        # Copy binary and web files
+        # Copy binary
         if [ -f "v4l2rtspserver" ]; then
-          cp v4l2rtspserver ../artifacts/
-          echo "::notice title=Binary::✅ Binary copied successfully"
+          cp v4l2rtspserver "../$PKG_DIR/"
+          echo "::notice title=Binary::✅ Binary copied for ${{ matrix.config.name }}"
         else
-          echo "::error title=Binary::❌ Binary not found!"
+          echo "::error title=Binary::❌ Binary not found for ${{ matrix.config.name }}!"
           exit 1
         fi
         
-        # Copy web files (these should be in parent directory)
-        cp ../index.html ../artifacts/ 2>/dev/null || echo "::warning title=Web Files::⚠️ index.html not found in parent directory"
-        cp ../hls.js ../artifacts/ 2>/dev/null || echo "::warning title=Web Files::⚠️ hls.js not found in parent directory"
+        # Copy web files if they exist
+        cp ../index.html "../$PKG_DIR/" 2>/dev/null || echo "::warning title=Web Files::⚠️ index.html not found"
+        cp ../hls.js "../$PKG_DIR/" 2>/dev/null || echo "::warning title=Web Files::⚠️ hls.js not found"
         
         # Copy DEB package if exists
         if ls *.deb 1> /dev/null 2>&1; then
-          cp *.deb ../artifacts/
-          echo "DEB_PACKAGE=$(ls *.deb | head -1)" >> $GITHUB_ENV
-          echo "::notice title=DEB Package::✅ DEB package copied"
-        else
-          echo "::notice title=DEB Package::ℹ️ No DEB package available"
+          cp *.deb "../$PKG_DIR/"
+          echo "::notice title=DEB Package::✅ DEB package copied for ${{ matrix.config.name }}"
         fi
         
-        echo "ARTIFACT_NAME=v4l2rtspserver-${{ matrix.system }}-${{ matrix.buildtype }}" >> $GITHUB_ENV
+        # Create README for this platform
+        cat << EOF > "../$PKG_DIR/README-${{ matrix.config.target }}.md"
+        # v4l2rtspserver for ${{ matrix.config.description }}
+        
+        ## Quick Start
+        \`\`\`bash
+        # Make executable
+        chmod +x v4l2rtspserver
+        
+        # Basic usage
+        ./v4l2rtspserver /dev/video0
+        
+        # With web interface
+        ./v4l2rtspserver -w 8080 /dev/video0
+        \`\`\`
+        
+        ## Optimized Settings for ${{ matrix.config.name }}
+        EOF
+        
+        if [ "${{ matrix.config.target }}" = "pi-zero" ]; then
+          cat << EOF >> "../$PKG_DIR/README-${{ matrix.config.target }}.md"
+        \`\`\`bash
+        # Low resolution for Pi Zero
+        ./v4l2rtspserver -W 320 -H 240 -F 10 -f MJPG /dev/video0
+        \`\`\`
+        
+        - Use low resolution: -W 320 -H 240
+        - Reduce framerate: -F 10 or -F 5  
+        - Use MJPEG format: -f MJPG
+        EOF
+        elif [ "${{ matrix.config.target }}" = "pi3-4" ]; then
+          cat << EOF >> "../$PKG_DIR/README-${{ matrix.config.target }}.md"
+        \`\`\`bash
+        # Standard resolution for Pi 3/4
+        ./v4l2rtspserver -W 640 -H 480 -F 15 /dev/video0
+        \`\`\`
+        
+        - Good performance with: -W 640 -H 480 -F 15
+        - Can handle H264: -f H264
+        EOF
+        else
+          cat << EOF >> "../$PKG_DIR/README-${{ matrix.config.target }}.md"
+        \`\`\`bash
+        # High resolution for ARM64
+        ./v4l2rtspserver -W 1280 -H 720 -F 30 /dev/video0
+        \`\`\`
+        
+        - High performance: -W 1280 -H 720 -F 30
+        - Full H264 support: -f H264
+        EOF
+        fi
+        
+        cat << EOF >> "../$PKG_DIR/README-${{ matrix.config.target }}.md"
+        
+        ## Access Streams
+        - RTSP: rtsp://PI_IP:8554/unicast
+        - Web: http://PI_IP:8080 (if -w enabled)
+        
+        ## Architecture
+        - Target: ${{ matrix.config.description }}
+        - Arch: ${{ matrix.config.arch }}
+        - Compiler: ${{ matrix.config.cc }}
+        - Flags: ${{ matrix.config.cflags }}
+        EOF
 
-    - name: Test binary
+    - name: 🧪 Test Binary
       run: |
         cd build
         echo "::group::🔍 Testing binary architecture"
         file ./v4l2rtspserver || echo "❌ Binary test failed"
-        ${{ matrix.crosscompiler }}-readelf -h ./v4l2rtspserver || echo "❌ ReadELF test failed"
+        ${{ env.STRIP }} --version || echo "Strip tool info"
         echo "::endgroup::"
         
         echo "::group::📏 Binary size"
         ls -lh ./v4l2rtspserver
         echo "::endgroup::"
+
+    - name: 📤 Create Release Archive
+      run: |
+        PKG_DIR="v4l2rtspserver-${{ matrix.config.target }}"
         
-        echo "::group::🔧 Testing compiler compatibility"
-        # Use the same flags that were actually used in compilation
-        COMPILER="${{ env.ACTUAL_COMPILER }}"
-        FLAGS="${{ env.ACTUAL_FLAGS }}"
+        echo "::group::📦 Package contents for ${{ matrix.config.name }}"
+        ls -la "$PKG_DIR"
+        echo "::endgroup::"
         
-        printf "Using compiler: %s\n" "$COMPILER"
-        printf "Using flags: %s\n" "$FLAGS"
+        # Create tarball
+        tar -czf "$PKG_DIR.tar.gz" "$PKG_DIR"
+        echo "✅ Created $PKG_DIR.tar.gz"
         
-        # Test compiler with simple program using correct flags
-        echo 'int main(){return 0;}' | $COMPILER $FLAGS -x c - -o test_compile || echo "⚠️ Compiler test failed (expected for some configurations)"
+        # Set environment variables for upload
+        echo "PACKAGE_NAME=$PKG_DIR" >> $GITHUB_ENV
+        echo "ARCHIVE_NAME=$PKG_DIR.tar.gz" >> $GITHUB_ENV
+
+    - name: 📤 Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: v4l2rtspserver-${{ matrix.config.target }}
+        path: v4l2rtspserver-${{ matrix.config.target }}.tar.gz
+        retention-days: 90
+        if-no-files-found: error
+
+    - name: 📤 Upload Binary Only (Quick Download)
+      uses: actions/upload-artifact@v4
+      with:
+        name: v4l2rtspserver-binary-${{ matrix.config.target }}
+        path: v4l2rtspserver-${{ matrix.config.target }}/v4l2rtspserver
+        retention-days: 90
+        if-no-files-found: error
+
+    - name: 🎉 Build Summary
+      run: |
+        echo "📊 Build Summary for ${{ matrix.config.description }}:"
+        echo "=============================================="
         
-        if [ -f "test_compile" ]; then
-          file test_compile
-          echo "::notice title=Test Result::✅ Test compilation successful"
-        else
-          echo "::notice title=Test Result::ℹ️ Test compilation failed, but main binary was built successfully"
+        if [ -f "v4l2rtspserver-${{ matrix.config.target }}/v4l2rtspserver" ]; then
+          SIZE=$(ls -lh v4l2rtspserver-${{ matrix.config.target }}/v4l2rtspserver | awk '{print $5}')
+          echo "✅ Binary size: $SIZE"
         fi
-        echo "::endgroup::"
-
-    - name: Create release archive
-      run: |
-        cd artifacts
-        tar -czf ../v4l2rtspserver-${{ matrix.system }}-${{ matrix.buildtype }}.tar.gz *
-        echo "RELEASE_ARCHIVE=v4l2rtspserver-${{ matrix.system }}-${{ matrix.buildtype }}.tar.gz" >> $GITHUB_ENV
-
-    - name: Upload to temporary storage (manual download)
-      run: |
-        # Disable command echoing for notices and groups
-        set +x
         
-        echo "::notice title=Build Status::✅ Build completed successfully!"
-        echo "::notice title=Artifact Details::Name: ${{ env.ARTIFACT_NAME }}"
-        echo "::notice title=Archive::📦 ${{ env.RELEASE_ARCHIVE }}"
-        echo "::notice title=Architecture::🏗️ ${{ matrix.system }} (${{ matrix.crosscompiler }})"
-        echo "::notice title=Build Type::🔧 ${{ matrix.buildtype }}"
-        echo "::notice title=Compiler Flags::⚙️ ${{ matrix.cmake_flags }}"
-        
-        echo "::group::📁 Artifacts created"
-        ls -la artifacts/
-        echo "::endgroup::"
-        
-        echo "::group::📦 Release archive created"
-        ls -la *.tar.gz
-        echo "::endgroup::"
-        
-        echo "::group::📥 Download Links"
-        echo "🔗 Artifacts will be available at:"
-        echo "   https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         echo ""
-        echo "📦 Look for artifact: ${{ env.ARTIFACT_NAME }}"
-        echo "📁 Contains: v4l2rtspserver binary, web files, and DEB package (if available)"
+        echo "🎯 Target: ${{ matrix.config.description }} (${{ matrix.config.arch }})"
+        echo "📦 Package: ${{ env.ARCHIVE_NAME }}"
+        echo "🚀 Ready for deployment!"
+
+    - name: 📥 Download Instructions
+      run: |
         echo ""
-        echo "⏰ Artifacts are kept for 90 days"
-        echo "::endgroup::"
-        
-        echo "::group::🚀 Usage Instructions for Raspberry Pi Zero"
-        cat << 'EOF'
-        1. Download the archive from this job
-        2. Extract: tar -xzf ${{ env.RELEASE_ARCHIVE }}
-        3. Copy to Pi: scp v4l2rtspserver pi@raspberrypi.local:~/
-        4. Make executable: chmod +x v4l2rtspserver
-        5. Run: ./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0
-        EOF
-        echo "::endgroup::"
-        
-        echo "::group::📋 Optimized Settings for Pi Zero"
-        cat << 'EOF'
-        • Low resolution: -W 320 -H 240 -F 10
-        • MJPEG format: -f MJPG
-        • With web interface: -w 8080
-        • Auto-detected ABI: hard-float or soft-float
-        EOF
-        echo "::endgroup::"
-
-    - name: Upload artifacts to GitHub Actions
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.ARTIFACT_NAME }}
-        path: |
-          artifacts/
-          *.tar.gz
-        retention-days: 90
-        if-no-files-found: error
-
-    - name: Upload binary only (quick download)
-      uses: actions/upload-artifact@v4
-      with:
-        name: v4l2rtspserver-binary-${{ matrix.system }}-${{ matrix.buildtype }}
-        path: artifacts/v4l2rtspserver
-        retention-days: 90
-        if-no-files-found: error
+        echo "🔗 DOWNLOAD LINKS:"
+        echo "=================="
+        echo ""
+        echo "1️⃣ Go to GitHub Actions page:"
+        echo " 👉 https://github.com/${{ github.repository }}/actions"
+        echo ""
+        echo "2️⃣ Click on this workflow run:"
+        echo " 👉 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        echo ""
+        echo "3️⃣ Scroll down to 'Artifacts' section and download:"
+        echo " 📦 v4l2rtspserver-${{ matrix.config.target }}.tar.gz"
+        echo ""
+        echo "📋 Package contains:"
+        echo " • v4l2rtspserver binary (optimized for ${{ matrix.config.name }})"
+        echo " • Web interface files (if available)"
+        echo " • DEB package (if available)"
+        echo " • README-${{ matrix.config.target }}.md (platform guide)"
+        echo ""
+        echo "🚀 Quick install on target device:"
+        echo " tar -xzf v4l2rtspserver-${{ matrix.config.target }}.tar.gz"
+        echo " cd v4l2rtspserver-${{ matrix.config.target }}"
+        echo " chmod +x v4l2rtspserver"
+        echo " ./v4l2rtspserver /dev/video0"
 
   # Summary job that runs after all builds complete
   download-summary:
     name: "📥 Download Summary"
     runs-on: ubuntu-latest
-    needs: build-pi-zero
+    needs: cross-compile-pi
     if: always()
 
     steps:
     - name: 📋 All Artifacts Summary
       run: |
         echo ""
-        echo "🚀 V4L2RTSPSERVER - RASPBERRY PI ZERO BUILD COMPLETE!"
-        echo "====================================================="
+        echo "🚀 V4L2RTSPSERVER - RASPBERRY PI CROSS-COMPILATION COMPLETE!"
+        echo "============================================================="
         echo ""
         echo "📦 Available Downloads:"
         echo "----------------------"
-        echo "• v4l2rtspserver-armv6l-Debug (Debug build)"
-        echo "• v4l2rtspserver-armv6l-Release (Release build - recommended)"
-        echo "• v4l2rtspserver-binary-armv6l-Debug (Debug binary only)"
-        echo "• v4l2rtspserver-binary-armv6l-Release (Release binary only)"
+        echo "• v4l2rtspserver-pi-zero (Raspberry Pi Zero/Zero W)"
+        echo "• v4l2rtspserver-pi3-4 (Raspberry Pi 3/4 32-bit)"
+        echo "• v4l2rtspserver-arm64 (ARM64/AArch64 64-bit)"
         echo ""
         echo "🔗 HOW TO DOWNLOAD:"
         echo "==================="
@@ -306,26 +367,22 @@ jobs:
         echo ""
         echo "2️⃣ Scroll to 'Artifacts' section at the bottom"
         echo ""
-        echo "3️⃣ Click to download the package for your Raspberry Pi Zero:"
-        echo " 🍓 Full package: v4l2rtspserver-armv6l-Release"
-        echo " ⚡ Quick binary: v4l2rtspserver-binary-armv6l-Release"
+        echo "3️⃣ Click to download the package for your platform:"
+        echo " 📱 Pi Zero: v4l2rtspserver-pi-zero.tar.gz"
+        echo " 🍓 Pi 3/4: v4l2rtspserver-pi3-4.tar.gz"
+        echo " 💪 ARM64: v4l2rtspserver-arm64.tar.gz"
         echo ""
-        echo "📋 Full package contains:"
-        echo " ✅ v4l2rtspserver binary (ARMv6 compatible)"
+        echo "📋 Each package contains:"
+        echo " ✅ Pre-compiled v4l2rtspserver binary"
         echo " ✅ Web interface files (index.html, hls.js)"
         echo " ✅ DEB package (if available)"
-        echo " ✅ Compressed archive (.tar.gz)"
+        echo " ✅ Platform-specific README with optimized settings"
         echo ""
-        echo "🚀 Installation on Raspberry Pi Zero:"
-        echo " # Extract archive"
-        echo " tar -xzf v4l2rtspserver-armv6l-Release.tar.gz"
-        echo " "
-        echo " # Copy binary to Pi Zero"
-        echo " scp v4l2rtspserver pi@raspberrypi.local:~/"
-        echo " "
-        echo " # Make executable and run"
+        echo "🚀 Installation on target device:"
+        echo " tar -xzf v4l2rtspserver-PLATFORM.tar.gz"
+        echo " cd v4l2rtspserver-PLATFORM/"
         echo " chmod +x v4l2rtspserver"
-        echo " ./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0"
+        echo " ./v4l2rtspserver /dev/video0"
         echo ""
         echo "🧪 Test your installation:"
         echo " # Basic RTSP stream"
@@ -333,16 +390,11 @@ jobs:
         echo " "
         echo " # With web interface"
         echo " ./v4l2rtspserver -w 8080 /dev/video0"
-        echo " "
-        echo " # Low resolution for Pi Zero"
-        echo " ./v4l2rtspserver -W 320 -H 240 -F 10 -f MJPG /dev/video0"
         echo ""
-        echo "💡 Performance tips for Pi Zero:"
-        echo " • Use low resolution: -W 320 -H 240"
-        echo " • Reduce framerate: -F 10 or -F 5"
-        echo " • Use MJPEG format: -f MJPG"
-        echo " • Enable web interface: -w 8080"
-        echo " • Auto-detected ABI: hard-float or soft-float"
+        echo "💡 Platform-specific optimizations:"
+        echo " • Pi Zero: Low resolution (-W 320 -H 240 -F 10 -f MJPG)"
+        echo " • Pi 3/4: Standard resolution (-W 640 -H 480 -F 15)"
+        echo " • ARM64: High resolution (-W 1280 -H 720 -F 30)"
         echo ""
         echo "🌐 Access streams:"
         echo " • RTSP: rtsp://PI_IP:8554/unicast"
