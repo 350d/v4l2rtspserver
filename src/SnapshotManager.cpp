@@ -158,7 +158,7 @@ bool SnapshotManager::findRelatedMJPEGDevice(const std::string& baseDevice, std:
     
     LOG(INFO) << "Searching for MJPEG devices related to " << baseDevice << " (base number: " << baseDeviceNum << ")";
     
-    // Check consecutive device numbers (many Pi cameras create video0, video1, etc.)
+    // First check consecutive device numbers (traditional approach)
     for (int offset = 1; offset <= 3; offset++) {
         std::string candidatePath = "/dev/video" + std::to_string(baseDeviceNum + offset);
         
@@ -183,7 +183,33 @@ bool SnapshotManager::findRelatedMJPEGDevice(const std::string& baseDevice, std:
         }
     }
     
-    LOG(INFO) << "No related MJPEG device found for " << baseDevice;
+    // If no consecutive devices found, scan all available video devices
+    LOG(INFO) << "No consecutive MJPEG devices found, scanning all video devices...";
+    std::vector<std::string> allDevices = findVideoDevices();
+    
+    for (const std::string& candidatePath : allDevices) {
+        // Skip the base device itself
+        if (candidatePath == baseDevice) {
+            continue;
+        }
+        
+        LOG(DEBUG) << "Checking video device: " << candidatePath;
+        
+        bool supportsH264, supportsMJPEG;
+        if (testDeviceFormats(candidatePath, supportsH264, supportsMJPEG)) {
+            LOG(INFO) << "Device " << candidatePath << " - H264: " << (supportsH264 ? "YES" : "NO") 
+                     << ", MJPEG: " << (supportsMJPEG ? "YES" : "NO");
+            if (supportsMJPEG) {
+                LOG(NOTICE) << "Found MJPEG device: " << candidatePath;
+                mjpegDevice = candidatePath;
+                return true;
+            }
+        } else {
+            LOG(DEBUG) << "Failed to test formats for device: " << candidatePath;
+        }
+    }
+    
+    LOG(INFO) << "No MJPEG device found among " << allDevices.size() << " video devices";
     return false;
 }
 
@@ -469,11 +495,18 @@ bool SnapshotManager::hasRecentSnapshot() const {
 std::vector<std::string> SnapshotManager::findVideoDevices() {
     std::vector<std::string> devices;
     
-    for (int i = 0; i < 8; i++) {
+    // Scan a wider range of video devices (0-31)
+    // Pi cameras often create devices with high numbers like video10, video20, etc.
+    for (int i = 0; i <= 31; i++) {
         std::string devicePath = "/dev/video" + std::to_string(i);
         if (access(devicePath.c_str(), F_OK) == 0) {
             devices.push_back(devicePath);
         }
+    }
+    
+    LOG(INFO) << "Found " << devices.size() << " video devices";
+    for (const std::string& device : devices) {
+        LOG(DEBUG) << "Available device: " << device;
     }
     
     return devices;
