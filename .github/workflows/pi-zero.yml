@@ -212,7 +212,7 @@ jobs:
 
     - name: Upload to temporary storage (manual download)
       run: |
-        # Disable command echoing for notices
+        # Disable command echoing for notices and groups
         set +x
         
         echo "::notice title=Build Status::✅ Build completed successfully!"
@@ -221,9 +221,6 @@ jobs:
         echo "::notice title=Architecture::🏗️ ${{ matrix.system }} (${{ matrix.crosscompiler }})"
         echo "::notice title=Build Type::🔧 ${{ matrix.buildtype }}"
         echo "::notice title=Compiler Flags::⚙️ ${{ matrix.cmake_flags }}"
-        
-        # Re-enable command echoing for other commands
-        set -x
         
         echo "::group::📁 Artifacts created"
         ls -la artifacts/
