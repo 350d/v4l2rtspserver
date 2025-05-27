@@ -20,13 +20,13 @@ jobs:
         - buildtype: Debug
           system: armv6l
           crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-march=armv6 -mfloat-abi=soft"
+          cmake_flags: "-march=armv6 -mfpu=vfp -mfloat-abi=hard"
           description: "Raspberry Pi Zero (Debug)"
           
         - buildtype: Release  
           system: armv6l
           crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-march=armv6 -mfloat-abi=soft"
+          cmake_flags: "-march=armv6 -mfpu=vfp -mfloat-abi=hard"
           description: "Raspberry Pi Zero (Release)"
 
     name: Build for ${{ matrix.description }}
@@ -63,6 +63,11 @@ jobs:
           git \
           g++-${{ matrix.crosscompiler }} \
           gcc-${{ matrix.crosscompiler }}
+        
+        # Try to install soft-float compiler as fallback
+        sudo apt-get install -y --no-install-recommends \
+          g++-arm-linux-gnueabi \
+          gcc-arm-linux-gnueabi || echo "Soft-float compiler not available"
 
     - name: Configure CMake for Pi Zero
       run: |
@@ -72,14 +77,38 @@ jobs:
         echo "🔧 Configuring CMake for Raspberry Pi Zero ARMv6..."
         echo "Compiler flags: ${{ matrix.cmake_flags }}"
         
+        # Check if soft-float compiler is available and use it if hard-float fails
+        COMPILER="${{ matrix.crosscompiler }}-gcc"
+        CXX_COMPILER="${{ matrix.crosscompiler }}-g++"
+        FLAGS="${{ matrix.cmake_flags }}"
+        
+        # Test compiler with simple program
+        echo 'int main(){return 0;}' > test_compile.c
+        if ! $COMPILER $FLAGS test_compile.c -o test_compile 2>/dev/null; then
+          echo "❌ Hard-float compiler failed, trying soft-float alternative..."
+          if command -v arm-linux-gnueabi-gcc > /dev/null; then
+            COMPILER="arm-linux-gnueabi-gcc" 
+            CXX_COMPILER="arm-linux-gnueabi-g++"
+            FLAGS="-march=armv6 -mfloat-abi=soft"
+            echo "✅ Using soft-float compiler: $COMPILER"
+            echo "✅ Using soft-float flags: $FLAGS"
+          else
+            echo "❌ No compatible compiler found!"
+            exit 1
+          fi
+        else
+          echo "✅ Hard-float compiler working: $COMPILER"
+        fi
+        rm -f test_compile.c test_compile
+        
         cmake \
           -DCMAKE_BUILD_TYPE=${{ matrix.buildtype }} \
           -DCMAKE_SYSTEM_NAME=Linux \
           -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.system }} \
-          -DCMAKE_C_COMPILER=${{ matrix.crosscompiler }}-gcc \
-          -DCMAKE_CXX_COMPILER=${{ matrix.crosscompiler }}-g++ \
-          -DCMAKE_C_FLAGS="${{ matrix.cmake_flags }}" \
-          -DCMAKE_CXX_FLAGS="${{ matrix.cmake_flags }}" \
+          -DCMAKE_C_COMPILER=$COMPILER \
+          -DCMAKE_CXX_COMPILER=$CXX_COMPILER \
+          -DCMAKE_C_FLAGS="$FLAGS" \
+          -DCMAKE_CXX_FLAGS="$FLAGS" \
           -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
           -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
           -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
@@ -181,7 +210,7 @@ jobs:
         echo "   - Low resolution: -W 320 -H 240 -F 10"
         echo "   - MJPEG format: -f MJPG"
         echo "   - With web interface: -w 8080"
-        echo "   - Compatible with ARMv6 soft-float"
+        echo "   - Auto-detected ABI: hard-float or soft-float"
         
         # Create a simple upload script for manual use
         cat << 'EOF' > upload_instructions.txt
@@ -199,7 +228,7 @@ jobs:
         echo "./v4l2rtspserver -W 640 -H 480 -F 15 -f MJPG /dev/video0  # Better quality" >> upload_instructions.txt
         echo "./v4l2rtspserver -w 8080 -W 320 -H 240 -F 10 /dev/video0  # With web UI" >> upload_instructions.txt
         echo "" >> upload_instructions.txt
-        echo "🔧 Compatibility: Built for ARMv6 with soft-float (Pi Zero compatible)" >> upload_instructions.txt
+        echo "🔧 Compatibility: Built for ARMv6 with auto-detected ABI (Pi Zero compatible)" >> upload_instructions.txt
         
         cat upload_instructions.txt
 
