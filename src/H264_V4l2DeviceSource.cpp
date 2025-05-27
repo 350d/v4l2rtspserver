@@ -43,11 +43,14 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 				LOG(INFO) << "IDR size:" << size << " bufSize:" << bufSize; 
 				// Process H264 keyframe for snapshot if enabled
 				if (SnapshotManager::getInstance().isEnabled()) {
-					// Use stored dimensions from SnapshotManager
-					SnapshotManager::getInstance().processH264Keyframe(buffer, size, 0, 0);
+					// Pass SPS/PPS data along with keyframe for better snapshot creation
+					SnapshotManager::getInstance().processH264KeyframeWithSPS(buffer, size, m_sps, m_pps, 0, 0);
 				}
+				// FIXED: Avoid duplicating SPS/PPS in stream - they are sent via getInitFrames()
+				// This prevents FFmpeg decoding issues caused by redundant parameter sets
 				if (m_repeatConfig && !m_sps.empty() && !m_pps.empty())
 				{
+					LOG(DEBUG) << "Repeating SPS/PPS before IDR frame (size: " << m_sps.size() << "/" << m_pps.size() << ")";
 					frameList.push_back(std::pair<unsigned char*,size_t>((unsigned char*)m_sps.c_str(), m_sps.size()));
 					frameList.push_back(std::pair<unsigned char*,size_t>((unsigned char*)m_pps.c_str(), m_pps.size()));
 				}
@@ -59,7 +62,10 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 		if (!m_sps.empty() && !m_pps.empty())
 		{
 			u_int32_t profile_level_id = 0;					
-			if (m_sps.size() >= 4) profile_level_id = (((unsigned char)m_sps[1])<<16)|(((unsigned char)m_sps[2])<<8)|((unsigned char)m_sps[3]); 
+			// Fix: properly extract profile_level_id from SPS (skip NAL unit type byte)
+			if (m_sps.size() >= 4) {
+				profile_level_id = (((unsigned char)m_sps[1])<<16)|(((unsigned char)m_sps[2])<<8)|((unsigned char)m_sps[3]);
+			}
 		
 			char* sps_base64 = base64Encode(m_sps.c_str(), m_sps.size());
 			char* pps_base64 = base64Encode(m_pps.c_str(), m_pps.size());		

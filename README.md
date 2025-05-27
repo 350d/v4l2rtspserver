@@ -30,6 +30,11 @@ The HTTP server support (available using -S option for capture format that could
 - HLS
 - MPEG-DASH
 
+**New Features:**
+- **Real-time snapshots** via `/snapshot` endpoint with intelligent format detection
+- **Smart format detection** - automatically selects supported video formats instead of blindly trying HEVC
+- **Multi-device camera analysis** with comprehensive device inspector tool
+
 Dependencies
 ------------
  - liblivemedia-dev [License LGPL](http://www.live555.com/liveMedia/) > live.2012.01.07 (need StreamReplicator)
@@ -43,47 +48,225 @@ If libssl-dev is not present rtsps/srtp will not be available
 
 Usage
 -----
-	./v4l2rtspserver [-v[v]] [-Q queueSize] [-O file] \
-			       [-I interface] [-P RTSP port] [-p RTSP/HTTP port] [-m multicast url] [-u unicast url] [-M multicast addr] [-c] [-t timeout] \
-			       [-r] [-s] [-W width] [-H height] [-F fps] [device1] [device2]
-		 -v       : verbose
-		 -vv      : very verbose
-		 -Q length: Number of frame queue  (default 10)
-		 -O output: Copy captured frame to a file or a V4L2 device
+	./v4l2rtspserver [-v[v]] [-Q queueSize] [-O file] [-j[filepath]] [-J wxhx[interval]] \
+			       [-I interface] [-P RTSP port] [-p RTSP/HTTP port] [-m multicast url] [-u unicast url] [-M multicast addr] [-c] [-t timeout] [-S[duration]] \
+			       [-r] [-s] [-W width] [-H height] [-F fps] [-f[format]] [device1] [device2]
+
+**General Options:**
+		 -v              : verbose (use -vv for very verbose)
+		 -Q <length>     : Number of frame queue (default 10)
+		 -O <output>     : Copy captured frame to a file or a V4L2 device
+		 -b <webroot>    : path to webroot for HTTP server
+
+**Snapshot Options:**
+		 -j [<filepath>] : enable snapshots accessible via /snapshot endpoint, optionally auto-save to file
+		 -J <w>x<h>[x<i>]: snapshot resolution and save interval (default 640x480x5, interval 1-60 seconds)
 		 
-		 RTSP options :
-		 -I addr  : RTSP interface (default autodetect)
-		 -P port  : RTSP port (default 8554)
-		 -p port  : RTSP over HTTP port (default 0)
-		 -U user:password : RTSP user and password
-		 -R realm  : use md5 password 'md5(<username>:<realm>:<password>')
-		 -u url   : unicast url (default unicast)
-		 -m url   : multicast url (default multicast)
-		 -M addr  : multicast group:port (default is random_address:20000)
-		 -c       : don't repeat config (default repeat config before IDR frame)
-		 -t secs  : RTCP expiration timeout (default 65)
-		 -S[secs] : HTTP segment duration (enable HLS & MPEG-DASH)
-		 -x <sslkeycert>  : enable SRTP
-		 -X               : enable RSTPS
+**RTSP/RTP Options:**
+		 -I <addr>       : RTSP interface (default autodetect)
+		 -P <port>       : RTSP port (default 8554)
+		 -p <port>       : RTSP over HTTP port (default 0)
+		 -U <user:pass>  : RTSP user and password
+		 -R <realm>      : use md5 password 'md5(<username>:<realm>:<password>'
+		 -u <url>        : unicast url (default unicast)
+		 -m <url>        : multicast url (default multicast)
+		 -M <addr>       : multicast group:port (default is random_address:20000)
+		 -c              : don't repeat config (recommended for FFmpeg compatibility)
+		 -t <secs>       : RTCP expiration timeout (default 65)
+		 -S[<duration>]  : enable HLS & MPEG-DASH with segment duration in seconds (default 2)
+		 -x <sslkeycert> : enable SRTP
+		 -X              : enable RTSPS
  
-		 V4L2 options :
-		 -r       : V4L2 capture using read interface (default use memory mapped buffers)
-		 -w       : V4L2 capture using write interface (default use memory mapped buffers)
-		 -B       : V4L2 capture using blocking mode (default use non-blocking mode)
-		 -s       : V4L2 capture using live555 mainloop (default use a separated reading thread)
-		 -f       : V4L2 capture using current capture format (-W,-H are ignored)
-		 -fformat : V4L2 capture using format (-W,-H are used)
-		 -W width : V4L2 capture width (default 640)
-		 -H height: V4L2 capture height (default 480)
-		 -F fps   : V4L2 capture framerate (default 25, 0 disable setting framerate)
-		 -G <w>x<h>[x<f>] : V4L2 capture format (default 0x0x25)
+**V4L2 Options:**
+		 -r              : V4L2 capture using read interface (default: memory mapped buffers)
+		 -w              : V4L2 capture using write interface (default: memory mapped buffers)
+		 -B              : V4L2 capture using blocking mode (default: non-blocking mode)
+		 -s              : V4L2 capture using live555 mainloop (default: separated reading thread)
+		 -f              : V4L2 capture using current capture format (-W,-H are ignored)
+		 -f<format>      : V4L2 capture using format (-W,-H are used)
+		 -W <width>      : V4L2 capture width (default 640)
+		 -H <height>     : V4L2 capture height (default 480)
+		 -F <fps>        : V4L2 capture framerate (default 25, 0 disable setting framerate)
+		 -G <w>x<h>[x<f>]: V4L2 capture format (default 0x0x25)
 		 
-		 ALSA options :
-		 -A freq    : ALSA capture frequency and channel (default 44100)
-		 -C channels: ALSA capture channels (default 2)
-		 -a fmt     : ALSA capture audio format (default S16_LE)
+**ALSA Options (if compiled with ALSA support):**
+		 -A <freq>       : ALSA capture frequency (default 44100)
+		 -C <channels>   : ALSA capture channels (default 2)
+		 -a <fmt>        : ALSA capture audio format (default S16_LE)
 		 
-		 device   : V4L2 capture device and/or ALSA device (default /dev/video0)
+**Device Specification:**
+		 device          : V4L2 capture device and/or ALSA device (default /dev/video0)
+		                  Examples: /dev/video0 (video only)
+		                           ,default (audio only)  
+		                           /dev/video0,default (video + audio)
+		                           /dev/video0 /dev/video1 (multiple video devices)
+
+Snapshot Support
+----------------
+v4l2rtspserver supports real-time image snapshots via HTTP endpoint `/snapshot` when started with `-j` flag.
+
+### Intelligent Snapshot Modes
+
+The system automatically selects the best snapshot mode based on camera capabilities:
+
+1. **MJPEG Stream Mode** - Real JPEG snapshots when camera streams in MJPEG format
+2. **MJPEG Device Mode** - Real JPEG snapshots from separate MJPEG device (ideal for dual-format cameras)  
+3. **H264 MP4 Mode** - Mini MP4 video snapshots with H264 keyframes (real video content)
+4. **H264 Fallback Mode** - Informational SVG snapshots for H264-only streams
+
+### Basic Usage
+
+```bash
+# Enable snapshots via HTTP endpoint only
+./v4l2rtspserver -j /dev/video0
+
+# Enable snapshots with automatic file saving
+./v4l2rtspserver -j /path/to/snapshot.jpg /dev/video0
+
+# Access snapshots via HTTP
+curl http://localhost:8554/snapshot > snapshot.jpg
+# or open in browser: http://localhost:8554/snapshot
+```
+
+### Advanced Configuration
+
+**Resolution and Save Interval Control:**
+```bash
+# Custom resolution (width x height)
+./v4l2rtspserver -j /tmp/snap.jpg -J 1280x720 /dev/video0
+
+# Custom resolution and save interval (width x height x interval_seconds)
+./v4l2rtspserver -j /tmp/snap.jpg -J 1920x1080x2 /dev/video0
+```
+
+**Save Frequency Options:**
+- **Default interval**: 5 seconds (balanced performance)
+- **High frequency**: 1-2 seconds (intensive monitoring)
+- **Low frequency**: 10-60 seconds (archival/storage optimization)
+- **Range validation**: Automatically clamps to 1-60 seconds
+
+### Practical Examples
+
+```bash
+# High-quality monitoring (every 2 seconds)
+./v4l2rtspserver -j /var/log/camera.jpg -J 1920x1080x2 /dev/video0
+
+# Balanced general use (every 5 seconds - default)
+./v4l2rtspserver -j /tmp/current.jpg -J 1280x720 /dev/video0
+
+# Archive mode (every 60 seconds, maximum interval)
+./v4l2rtspserver -j /archive/hourly.jpg -J 1920x1080x60 /dev/video0
+
+# Multi-format support for best compatibility
+./v4l2rtspserver -j /tmp/snap.jpg -J 640x480x1 -fH264 -fMJPEG /dev/video0
+```
+
+### Multi-Device Camera Support
+
+For cameras creating multiple video devices (e.g., `/dev/video0` for H264, `/dev/video1` for MJPEG):
+- System automatically detects related MJPEG devices
+- Uses MJPEG device for real image snapshots while streaming H264
+- Configurable snapshot resolution independent of stream resolution
+
+### File Auto-Save Features
+
+- **Frequency control**: Respects save interval to prevent disk overload
+- **Format auto-detection**: Automatically determines file extension (.jpg, .mp4, .svg)
+- **Thread-safe operations**: Non-blocking file writes
+- **Error handling**: Graceful fallback on file system errors
+- **HTTP always available**: Endpoint returns latest snapshot regardless of save interval
+
+### Docker Usage
+
+```bash
+# Enable snapshots in Docker
+docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -j
+
+# Access snapshots
+curl http://localhost:8554/snapshot > snapshot.jpg
+```
+
+Smart Format Detection
+----------------------
+The server intelligently detects and prioritizes supported video formats instead of attempting unsupported formats.
+This prevents common errors like `"Cannot set pixelformat to:HEVC format is:YU12"` on cameras that don't support HEVC.
+
+### Automatic Format Priority
+
+**Default priority order (if no format specified):**
+1. **H264** - Most common and efficient, best compatibility
+2. **HEVC/H265** - High quality, if supported by device  
+3. **MJPEG** - Good compatibility, useful for snapshots
+4. **JPEG** - Basic JPEG format
+5. **NV12** - Raw format fallback
+
+### Manual Format Override
+
+```bash
+# Force specific format (bypasses auto-detection)
+./v4l2rtspserver -fH264 /dev/video0     # Force H264
+./v4l2rtspserver -fMJPG /dev/video0     # Force MJPEG
+./v4l2rtspserver -fHEVC /dev/video0     # Force HEVC (if supported)
+
+# Multiple format support (try in order)
+./v4l2rtspserver -fH264 -fMJPEG /dev/video0
+```
+
+### FFmpeg Compatibility Enhancement
+
+For optimal FFmpeg decoding compatibility:
+```bash
+# Recommended settings for FFmpeg clients
+./v4l2rtspserver -c /dev/video0
+
+# Combined with snapshots
+./v4l2rtspserver -c -j /tmp/snap.jpg /dev/video0
+
+# Full optimization for FFmpeg + snapshots
+./v4l2rtspserver -c -j /tmp/snap.jpg -J 1280x720x5 -fH264 /dev/video0
+```
+
+**Why use `-c` flag:**
+- Disables SPS/PPS parameter repetition in H264 stream
+- Prevents duplicate parameter sets that can confuse FFmpeg
+- Improves stream parsing reliability
+- Recommended for all FFmpeg-based applications
+
+### Device Format Analysis
+
+Use the device inspector to check format support:
+```bash
+# Analyze device capabilities
+./device_inspector /dev/video0
+
+# Multi-device analysis
+./device_inspector /dev/video0 --multi
+```
+
+Device Inspector Tool
+--------------------
+Build and use the device inspector to analyze camera capabilities:
+
+```bash
+# Build inspector tool
+./build_tools.sh
+
+# Scan all video devices
+./device_inspector
+
+# Analyze specific device
+./device_inspector /dev/video0
+
+# Comprehensive multi-device testing
+./device_inspector /dev/video0 --multi
+```
+
+**The inspector reports:**
+- Supported video formats (H264, MJPEG, HEVC, etc.)
+- Multi-device camera detection
+- Concurrent access capabilities  
+- Optimal configuration recommendations
+- Device compatibility matrix
 
 When audio support is not present, ALSA options are not printed running with `-h` argument.
 
@@ -160,22 +343,154 @@ It is now possible to play HLS url directly from browser :
 
 There is also a small HTML page that use hls.js.
 
-Using Docker image
-===============
-You can start the application using the docker image :
+HLS & MPEG-DASH Streaming
+-------------------------
+When started with `-S` parameter, v4l2rtspserver provides HTTP streaming in HLS and MPEG-DASH formats.
 
-        docker run -p 8554:8554 -it mpromonet/v4l2rtspserver
+### Basic HLS Setup
 
-You can expose V4L2 devices from your host using :
+```bash
+# Enable HLS with 5-second segments
+./v4l2rtspserver -S5 /dev/video0
 
-        docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver
+# Access HLS playlist
+http://localhost:8554/ts.m3u8
 
-The container entry point is the v4l2rtspserver application, then you can :
+# With custom port
+./v4l2rtspserver -P 9999 -S5 /dev/video0
+http://localhost:9999/ts.m3u8
+```
 
-* get the help using :
+### Playback Options
 
-        docker run -it mpromonet/v4l2rtspserver -h
+**Command Line Players:**
+```bash
+# VLC
+vlc http://localhost:8554/ts.m3u8
 
-* run the container specifying some paramters :
+# FFplay
+ffplay http://localhost:8554/ts.m3u8
 
-        docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -u "" -H640 -W480 
+# GStreamer
+gstreamer-launch-1.0 playbin uri=http://localhost:8554/ts.m3u8
+```
+
+**Browser Playback:**
+- **Safari**: Native HLS support
+- **Firefox**: Install [Native HLS addon](https://addons.mozilla.org/en-US/firefox/addon/native_hls_playback)
+- **Chrome**: Install [Native HLS playback extension](https://chrome.google.com/webstore/detail/native-hls-playback/emnphkkblegpebimobpbekeedfgemhof)
+
+### Troubleshooting Common Issues
+
+**1. Format Compatibility**
+```bash
+# HLS requires H264 or H265 - force H264 if needed
+./v4l2rtspserver -S5 -fH264 /dev/video0
+
+# MJPEG/JPEG formats are NOT supported for HLS
+```
+
+**2. Safari/Browser Compatibility**
+```bash
+# Recommended settings for browser compatibility
+./v4l2rtspserver -P 9999 -S5 -c -fH264 /dev/video0
+```
+
+**3. Segment Access Issues**  
+If you see "405 Method Not Allowed" errors:
+```bash
+# Check playlist availability
+curl -v "http://localhost:8554/ts.m3u8"
+
+# Check specific segment (replace 0 with actual segment number)
+curl -v "http://localhost:8554/ts?segment=0" --output test.ts
+```
+
+**4. Performance Optimization**
+```bash
+# Increase buffer for stability
+./v4l2rtspserver -S5 -Q 10 -fH264 /dev/video0
+
+# Optimal settings for reliability
+./v4l2rtspserver -S3 -c -Q 15 -fH264 /dev/video0
+```
+
+### Key Parameters for HLS
+
+- **`-S<seconds>`**: Segment duration (3-10 seconds recommended)
+- **`-c`**: Disable SPS/PPS repetition (improves compatibility)  
+- **`-fH264`**: Force H264 format (required for HLS)
+- **`-Q <size>`**: Buffer queue size for stability
+- **`-P <port>`**: Custom port if needed
+
+Using Docker Image
+==================
+
+### Basic Docker Usage
+
+```bash
+# Basic RTSP streaming
+docker run -p 8554:8554 -it mpromonet/v4l2rtspserver
+
+# With V4L2 device access
+docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver
+
+# Get help
+docker run -it mpromonet/v4l2rtspserver -h
+```
+
+### Advanced Docker Examples
+
+**Custom resolution and parameters:**
+```bash
+docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver \
+    -u "" -H640 -W480 -F25
+```
+
+**With snapshots enabled:**
+```bash
+# Enable snapshots (HTTP endpoint only)
+docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -j
+
+# Access snapshots from host
+curl http://localhost:8554/snapshot > snapshot.jpg
+```
+
+**HLS streaming:**
+```bash
+# Enable HLS with 5-second segments
+docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -S5 -fH264
+
+# Access HLS stream
+# http://localhost:8554/ts.m3u8
+```
+
+**Optimized for FFmpeg compatibility:**
+```bash
+docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver \
+    -c -j -fH264 -Q 10
+```
+
+**Multi-format with snapshots:**
+```bash
+docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver \
+    -j -J 1280x720x5 -fH264 -fMJPEG -c
+```
+
+### Docker with Volume Mounting (for file snapshots)
+
+```bash
+# Mount volume for snapshot saving
+docker run --device=/dev/video0 -p 8554:8554 \
+    -v /host/snapshots:/snapshots \
+    -it mpromonet/v4l2rtspserver \
+    -j /snapshots/camera.jpg -J 1920x1080x10
+```
+
+### Accessing Services
+
+Once running, access the services at:
+- **RTSP Stream**: `rtsp://localhost:8554/unicast`
+- **HTTP Snapshots**: `http://localhost:8554/snapshot`
+- **HLS Stream**: `http://localhost:8554/ts.m3u8` (if `-S` enabled)
+- **MPEG-DASH**: `http://localhost:8554/ts.mpd` (if `-S` enabled)

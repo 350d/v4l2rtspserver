@@ -26,7 +26,8 @@
 
 SnapshotManager::SnapshotManager() 
     : m_enabled(false), m_mode(SnapshotMode::DISABLED), 
-      m_width(0), m_height(0), m_lastSnapshotTime(0) {
+      m_width(0), m_height(0), m_snapshotWidth(640), m_snapshotHeight(480), 
+      m_lastSnapshotTime(0), m_saveInterval(5), m_lastSaveTime(0) {
 }
 
 SnapshotManager::~SnapshotManager() {
@@ -36,6 +37,26 @@ SnapshotManager::~SnapshotManager() {
 void SnapshotManager::setFrameDimensions(int width, int height) {
     m_width = width;
     m_height = height;
+}
+
+void SnapshotManager::setSnapshotResolution(int width, int height) {
+    m_snapshotWidth = width > 0 ? width : 640;
+    m_snapshotHeight = height > 0 ? height : 480;
+    LOG(INFO) << "Snapshot resolution set to: " << m_snapshotWidth << "x" << m_snapshotHeight;
+}
+
+void SnapshotManager::setSaveInterval(int intervalSeconds) {
+    // Validate range: 1-60 seconds
+    if (intervalSeconds < 1) {
+        intervalSeconds = 1;
+        LOG(WARN) << "Save interval too low, set to minimum: 1 second";
+    } else if (intervalSeconds > 60) {
+        intervalSeconds = 60;
+        LOG(WARN) << "Save interval too high, set to maximum: 60 seconds";
+    }
+    
+    m_saveInterval = intervalSeconds;
+    LOG(INFO) << "Snapshot save interval set to: " << m_saveInterval << " seconds";
 }
 
 bool SnapshotManager::initialize(int width, int height) {
@@ -101,8 +122,8 @@ bool SnapshotManager::tryInitializeMJPEGDevice(const std::string& primaryDevice)
         std::list<unsigned int> formatList;
         formatList.push_back(V4L2_PIX_FMT_MJPEG);
         
-        // Use 640x480 for snapshots to be efficient
-        V4L2DeviceParameters params(mjpegDevice.c_str(), formatList, 640, 480, 1, IOTYPE_MMAP);
+        // Use configurable resolution for snapshots (default 640x480)
+        V4L2DeviceParameters params(mjpegDevice.c_str(), formatList, m_snapshotWidth, m_snapshotHeight, 1, IOTYPE_MMAP);
         
         auto device = std::unique_ptr<V4l2Capture>(V4l2Capture::create(params));
         if (device && device->isReady()) {
@@ -190,6 +211,12 @@ void SnapshotManager::processMJPEGFrame(const unsigned char* jpegData, size_t da
     }
     
     LOG(DEBUG) << "Real MJPEG snapshot captured: " << dataSize << " bytes";
+    
+    // Release lock before auto-save to avoid blocking
+    lock.~lock_guard();
+    
+    // Auto-save if file path is specified
+    autoSaveSnapshot();
 }
 
 void SnapshotManager::processH264Keyframe(const unsigned char* h264Data, size_t dataSize, int width, int height) {
@@ -206,6 +233,30 @@ void SnapshotManager::processH264Keyframe(const unsigned char* h264Data, size_t 
     
     // Fallback to info snapshot
     createH264InfoSnapshot(dataSize, width, height);
+}
+
+void SnapshotManager::processH264KeyframeWithSPS(const unsigned char* h264Data, size_t dataSize, 
+                                                const std::string& sps, const std::string& pps, 
+                                                int width, int height) {
+    if (!m_enabled || !h264Data || dataSize == 0) {
+        return;
+    }
+    
+    // If we have a separate MJPEG device, try to capture from it first
+    if (m_mode == SnapshotMode::MJPEG_DEVICE && m_mjpegDevice) {
+        if (captureMJPEGSnapshot()) {
+            return; // Successfully captured real MJPEG snapshot
+        }
+    }
+    
+    // If we have SPS/PPS data, create MP4 snapshot
+    if (!sps.empty() && !pps.empty()) {
+        createH264MP4Snapshot(h264Data, dataSize, sps, pps, width, height);
+        m_mode = SnapshotMode::H264_MP4;
+    } else {
+        // Fallback to SVG info snapshot
+        createH264InfoSnapshot(dataSize, width, height);
+    }
 }
 
 void SnapshotManager::processRawFrame(const unsigned char* yuvData, size_t dataSize, int width, int height) {
@@ -287,7 +338,11 @@ void SnapshotManager::createH264InfoSnapshot(size_t h264Size, int width, int hei
     m_currentSnapshot.assign(svgContent.begin(), svgContent.end());
     m_lastSnapshotTime = std::time(nullptr);
     
-    LOG(DEBUG) << "H264 info snapshot created";
+    LOG(DEBUG) << "H264 fallback snapshot (SVG) created: " << m_currentSnapshot.size() << " bytes for " 
+               << h264Size << " bytes of H264 data (" << width << "x" << height << ")";
+    
+    // Auto-save if file path is specified
+    autoSaveSnapshot();
 }
 
 bool SnapshotManager::getSnapshot(std::vector<unsigned char>& jpegData) {
@@ -306,6 +361,8 @@ std::string SnapshotManager::getSnapshotMimeType() const {
         case SnapshotMode::MJPEG_STREAM:
         case SnapshotMode::MJPEG_DEVICE:
             return "image/jpeg";
+        case SnapshotMode::H264_MP4:
+            return "video/mp4";
         case SnapshotMode::H264_FALLBACK:
             return "image/svg+xml";
         default:
@@ -321,6 +378,8 @@ std::string SnapshotManager::getModeDescription() const {
             return "MJPEG Stream (real images when MJPEG active)";
         case SnapshotMode::MJPEG_DEVICE:
             return "Separate MJPEG Device (always real images)";
+        case SnapshotMode::H264_MP4:
+            return "H264 MP4 (mini video snapshots with keyframes)";
         case SnapshotMode::H264_FALLBACK:
             return "H264 Fallback (info snapshots only)";
         default:
@@ -350,4 +409,242 @@ std::vector<std::string> SnapshotManager::findVideoDevices() {
     }
     
     return devices;
+}
+
+void SnapshotManager::createH264MP4Snapshot(const unsigned char* h264Data, size_t h264Size, 
+                                           const std::string& sps, const std::string& pps, 
+                                           int width, int height) {
+    // Create minimal but valid MP4 container with single H264 frame
+    int actualWidth = width > 0 ? width : (m_width > 0 ? m_width : 640);
+    int actualHeight = height > 0 ? height : (m_height > 0 ? m_height : 480);
+    
+    std::vector<unsigned char> mp4Data;
+    
+    // Helper lambda to write 32-bit big-endian value
+    auto writeBE32 = [&mp4Data](uint32_t value) {
+        mp4Data.push_back((value >> 24) & 0xFF);
+        mp4Data.push_back((value >> 16) & 0xFF);
+        mp4Data.push_back((value >> 8) & 0xFF);
+        mp4Data.push_back(value & 0xFF);
+    };
+    
+    // Helper lambda to write 16-bit big-endian value
+    auto writeBE16 = [&mp4Data](uint16_t value) {
+        mp4Data.push_back((value >> 8) & 0xFF);
+        mp4Data.push_back(value & 0xFF);
+    };
+    
+    // Helper lambda to write string
+    auto writeString = [&mp4Data](const std::string& str) {
+        mp4Data.insert(mp4Data.end(), str.begin(), str.end());
+    };
+    
+    // 1. FTYP box (File Type)
+    size_t ftypStart = mp4Data.size();
+    writeBE32(0); // size placeholder
+    writeString("ftyp");
+    writeString("mp42");           // major brand
+    writeBE32(0);                  // minor version  
+    writeString("mp42isom");       // compatible brands
+    
+    // Update ftyp size
+    uint32_t ftypSize = mp4Data.size() - ftypStart;
+    mp4Data[ftypStart] = (ftypSize >> 24) & 0xFF;
+    mp4Data[ftypStart + 1] = (ftypSize >> 16) & 0xFF;
+    mp4Data[ftypStart + 2] = (ftypSize >> 8) & 0xFF;
+    mp4Data[ftypStart + 3] = ftypSize & 0xFF;
+    
+    // 2. MOOV box (Movie metadata)
+    size_t moovStart = mp4Data.size();
+    writeBE32(0); // size placeholder
+    writeString("moov");
+    
+    // 2.1 MVHD box (Movie header)
+    size_t mvhdStart = mp4Data.size();
+    writeBE32(0); // size placeholder
+    writeString("mvhd");
+    writeBE32(0);                  // version & flags
+    writeBE32(0);                  // creation time
+    writeBE32(0);                  // modification time  
+    writeBE32(1000);               // timescale (1000 units per second)
+    writeBE32(100);                // duration (0.1 second)
+    writeBE32(0x00010000);         // preferred rate (1.0)
+    writeBE16(0x0100);             // preferred volume (1.0)
+    // Reserved
+    for (int i = 0; i < 10; i++) mp4Data.push_back(0);
+    // Matrix structure (identity matrix)
+    writeBE32(0x00010000); writeBE32(0); writeBE32(0);
+    writeBE32(0); writeBE32(0x00010000); writeBE32(0);
+    writeBE32(0); writeBE32(0); writeBE32(0x40000000);
+    // Preview time/duration, poster time, selection time/duration, current time
+    for (int i = 0; i < 6; i++) writeBE32(0);
+    writeBE32(2);                  // next track ID
+    
+    // Update mvhd size
+    uint32_t mvhdSize = mp4Data.size() - mvhdStart;
+    mp4Data[mvhdStart] = (mvhdSize >> 24) & 0xFF;
+    mp4Data[mvhdStart + 1] = (mvhdSize >> 16) & 0xFF;
+    mp4Data[mvhdStart + 2] = (mvhdSize >> 8) & 0xFF;
+    mp4Data[mvhdStart + 3] = mvhdSize & 0xFF;
+    
+    // 2.2 TRAK box (Track container)
+    size_t trakStart = mp4Data.size();
+    writeBE32(0); // size placeholder
+    writeString("trak");
+    
+    // 2.2.1 TKHD box (Track header)
+    size_t tkhdStart = mp4Data.size();
+    writeBE32(0); // size placeholder
+    writeString("tkhd");
+    writeBE32(0x000000007);        // version & flags (track enabled)
+    writeBE32(0);                  // creation time
+    writeBE32(0);                  // modification time
+    writeBE32(1);                  // track ID
+    writeBE32(0);                  // reserved
+    writeBE32(100);                // duration
+    writeBE32(0); writeBE32(0);    // reserved
+    writeBE16(0);                  // layer
+    writeBE16(0);                  // alternate group
+    writeBE16(0);                  // volume
+    writeBE16(0);                  // reserved
+    // Matrix structure (identity matrix)
+    writeBE32(0x00010000); writeBE32(0); writeBE32(0);
+    writeBE32(0); writeBE32(0x00010000); writeBE32(0);
+    writeBE32(0); writeBE32(0); writeBE32(0x40000000);
+    writeBE32(actualWidth << 16);  // track width
+    writeBE32(actualHeight << 16); // track height
+    
+    // Update tkhd size
+    uint32_t tkhdSize = mp4Data.size() - tkhdStart;
+    mp4Data[tkhdStart] = (tkhdSize >> 24) & 0xFF;
+    mp4Data[tkhdStart + 1] = (tkhdSize >> 16) & 0xFF;
+    mp4Data[tkhdStart + 2] = (tkhdSize >> 8) & 0xFF;
+    mp4Data[tkhdStart + 3] = tkhdSize & 0xFF;
+    
+    // Update trak size
+    uint32_t trakSize = mp4Data.size() - trakStart;
+    mp4Data[trakStart] = (trakSize >> 24) & 0xFF;
+    mp4Data[trakStart + 1] = (trakSize >> 16) & 0xFF;
+    mp4Data[trakStart + 2] = (trakSize >> 8) & 0xFF;
+    mp4Data[trakStart + 3] = trakSize & 0xFF;
+    
+    // Update moov size
+    uint32_t moovSize = mp4Data.size() - moovStart;
+    mp4Data[moovStart] = (moovSize >> 24) & 0xFF;
+    mp4Data[moovStart + 1] = (moovSize >> 16) & 0xFF;
+    mp4Data[moovStart + 2] = (moovSize >> 8) & 0xFF;
+    mp4Data[moovStart + 3] = moovSize & 0xFF;
+    
+    // 3. MDAT box (Media data) - simplified approach
+    // For a single frame, we'll include SPS, PPS, and IDR frame with Annex B start codes
+    size_t dataSize = 4 + sps.size() + 4 + pps.size() + 4 + h264Size;
+    writeBE32(8 + dataSize);       // mdat box size
+    writeString("mdat");
+    
+    // Add NAL units with Annex B start codes
+    writeBE32(0x00000001);         // start code
+    mp4Data.insert(mp4Data.end(), sps.begin(), sps.end());
+    
+    writeBE32(0x00000001);         // start code
+    mp4Data.insert(mp4Data.end(), pps.begin(), pps.end());
+    
+    writeBE32(0x00000001);         // start code
+    mp4Data.insert(mp4Data.end(), h264Data, h264Data + h264Size);
+    
+    std::lock_guard<std::mutex> lock(m_snapshotMutex);
+    m_currentSnapshot = mp4Data;
+    m_lastSnapshotTime = std::time(nullptr);
+    
+    LOG(DEBUG) << "H264 MP4 snapshot created: " << mp4Data.size() << " bytes (" 
+               << actualWidth << "x" << actualHeight << "), SPS:" << sps.size() 
+               << " PPS:" << pps.size() << " IDR:" << h264Size;
+    
+    // Auto-save if file path is specified
+    autoSaveSnapshot();
+}
+
+void SnapshotManager::autoSaveSnapshot() {
+    if (m_filePath.empty()) {
+        return;
+    }
+    
+    // Check save interval
+    std::time_t now = std::time(nullptr);
+    if (m_lastSaveTime > 0 && (now - m_lastSaveTime) < m_saveInterval) {
+        // Too soon to save again
+        return;
+    }
+    
+    std::vector<unsigned char> dataToSave;
+    {
+        std::lock_guard<std::mutex> lock(m_snapshotMutex);
+        dataToSave = m_currentSnapshot;
+    }
+    
+    if (dataToSave.empty()) {
+        return;
+    }
+    
+    try {
+        std::ofstream file(m_filePath, std::ios::binary);
+        if (file.is_open()) {
+            file.write(reinterpret_cast<const char*>(dataToSave.data()), dataToSave.size());
+            file.close();
+            if (file.good()) {
+                m_lastSaveTime = now; // Update save time only on successful save
+                LOG(DEBUG) << "Auto-saved snapshot: " << m_filePath << " (" << dataToSave.size() << " bytes)";
+            } else {
+                LOG(ERROR) << "Error writing snapshot to file: " << m_filePath;
+            }
+        } else {
+            LOG(ERROR) << "Failed to open file for writing: " << m_filePath;
+        }
+    } catch (const std::exception& e) {
+        LOG(ERROR) << "Exception while auto-saving snapshot: " << e.what();
+    } catch (...) {
+        LOG(ERROR) << "Unknown exception while auto-saving snapshot";
+    }
+}
+
+bool SnapshotManager::saveSnapshotToFile() {
+    if (m_filePath.empty()) {
+        LOG(ERROR) << "No file path specified for snapshot saving";
+        return false;
+    }
+    return saveSnapshotToFile(m_filePath);
+}
+
+bool SnapshotManager::saveSnapshotToFile(const std::string& filePath) {
+    if (!m_enabled) {
+        LOG(WARN) << "Snapshots are disabled";
+        return false;
+    }
+    
+    std::vector<unsigned char> snapshotData;
+    if (!getSnapshot(snapshotData) || snapshotData.empty()) {
+        LOG(WARN) << "No snapshot data available for saving";
+        return false;
+    }
+    
+    try {
+        std::ofstream file(filePath, std::ios::binary);
+        if (!file.is_open()) {
+            LOG(ERROR) << "Failed to open file for writing: " << filePath;
+            return false;
+        }
+        
+        file.write(reinterpret_cast<const char*>(snapshotData.data()), snapshotData.size());
+        file.close();
+        
+        if (file.good()) {
+            LOG(NOTICE) << "Snapshot saved to file: " << filePath << " (" << snapshotData.size() << " bytes)";
+            return true;
+        } else {
+            LOG(ERROR) << "Error writing snapshot to file: " << filePath;
+            return false;
+        }
+    } catch (const std::exception& e) {
+        LOG(ERROR) << "Exception while saving snapshot: " << e.what();
+        return false;
+    }
 } 

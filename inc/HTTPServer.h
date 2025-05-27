@@ -14,6 +14,7 @@
 #pragma once
 
 #include <list>
+#include <vector>
 
 // hacking private members RTSPServer::fWeServeSRTP & RTSPServer::fWeEncryptSRTP
 #define private protected
@@ -144,6 +145,7 @@ class HTTPServer : public RTSPServer
 			void sendHeader(const char* contentType, unsigned int contentLength);		
 			void streamSource(FramedSource* source);	
 			void streamSource(const std::string & content);
+			void streamSource(const std::vector<unsigned char>& binaryData);
 			ServerMediaSubsession* getSubsesion(const char* urlSuffix);
 			bool sendFile(char const* urlSuffix);
 			bool sendM3u8PlayList(char const* urlSuffix);

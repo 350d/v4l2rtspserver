@@ -55,6 +55,13 @@ void HTTPServer::HTTPClientConnection::streamSource(const std::string & content)
 	this->streamSource(ByteStreamMemoryBufferSource::createNew(envir(), buffer, content.size()));
 }
 
+void HTTPServer::HTTPClientConnection::streamSource(const std::vector<unsigned char>& binaryData)
+{
+	u_int8_t* buffer = new u_int8_t[binaryData.size()];
+	memcpy(buffer, binaryData.data(), binaryData.size());
+	this->streamSource(ByteStreamMemoryBufferSource::createNew(envir(), buffer, binaryData.size()));
+}
+
 void HTTPServer::HTTPClientConnection::streamSource(FramedSource* source)
 {
       if (m_TCPSink != NULL) 
@@ -243,7 +250,7 @@ void HTTPServer::HTTPClientConnection::handleHTTPCmd_StreamingGET(char const* ur
 		this->sendHeader("text/plain", content.size());
 		this->streamSource(content);
 	}
-	else if (strncmp(urlSuffix, "getSnapshot", strlen("getSnapshot")) == 0) 
+	else if (strncmp(urlSuffix, "snapshot", strlen("snapshot")) == 0) 
 	{
 		// Get snapshot from SnapshotManager
 		std::vector<unsigned char> snapshotData;
@@ -252,9 +259,8 @@ void HTTPServer::HTTPClientConnection::handleHTTPCmd_StreamingGET(char const* ur
 			std::string mimeType = SnapshotManager::getInstance().getSnapshotMimeType();
 			
 			this->sendHeader(mimeType.c_str(), snapshotData.size());
-			// Create string from vector data
-			std::string snapshotString(snapshotData.begin(), snapshotData.end());
-			this->streamSource(snapshotString);
+			// Stream binary data directly without string conversion
+			this->streamSource(snapshotData);
 		} else {
 			// No snapshot available
 			std::ostringstream os;

@@ -103,6 +103,10 @@ int main(int argc, char** argv)
 	std::list<std::string> userPasswordList;
 	std::string webroot;
 	bool enableSnapshots = false;
+	int snapshotWidth = 640;
+	int snapshotHeight = 480;
+	int snapshotSaveInterval = 5; // Default 5 seconds
+	std::string snapshotFilePath;
 #ifdef HAVE_ALSA	
 	int audioFreq = 44100;
 	int audioNbChannels = 2;
@@ -116,7 +120,7 @@ int main(int argc, char** argv)
 
 	// decode parameters
 	int c = 0;     
-	while ((c = getopt (argc, argv, "v::Q:O:b:j" "I:P:p:m::u:M::ct:S::x:X" "R:U:" "rwBsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
+	while ((c = getopt (argc, argv, "v::Q:O:b:j::J:" "I:P:p:m::u:M::ct:S::x:X" "R:U:" "rwBsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
 	{
 		switch (c)
 		{
@@ -124,7 +128,38 @@ int main(int argc, char** argv)
 			case 'Q':	queueSize  = atoi(optarg); break;
 			case 'O':	outputFile = optarg; break;
 			case 'b':	webroot = optarg; break;
-			case 'j':	enableSnapshots = true; break;
+			case 'j':	
+				enableSnapshots = true; 
+				if (optarg) {
+					snapshotFilePath = optarg;
+				}
+				break;
+			case 'J':   
+			{
+				// Parse format: widthxheight or widthxheightxinterval
+				int tmpWidth = 640, tmpHeight = 480, tmpInterval = 5;
+				int parsed = sscanf(optarg, "%dx%dx%d", &tmpWidth, &tmpHeight, &tmpInterval);
+				if (parsed >= 2) {
+					snapshotWidth = tmpWidth;
+					snapshotHeight = tmpHeight;
+					if (parsed >= 3) {
+						// Validate interval range: 1-60 seconds
+						if (tmpInterval < 1) {
+							printf("Warning: Save interval too low (%d), using minimum: 1 second\n", tmpInterval);
+							tmpInterval = 1;
+						} else if (tmpInterval > 60) {
+							printf("Warning: Save interval too high (%d), using maximum: 60 seconds\n", tmpInterval);
+							tmpInterval = 60;
+						}
+						snapshotSaveInterval = tmpInterval;
+					}
+				} else if (sscanf(optarg, "%dx%d", &tmpWidth, &tmpHeight) == 2) {
+					// Fallback for old format
+					snapshotWidth = tmpWidth;
+					snapshotHeight = tmpHeight;
+				}
+			}
+			break;
 			
 			// RTSP/RTP
 			case 'I':       ReceivingInterfaceAddr  = inet_addr(optarg); break;
@@ -181,7 +216,8 @@ int main(int argc, char** argv)
 				std::cout << "\t -Q <length>      : Number of frame queue  (default "<< queueSize << ")"                                              << std::endl;
 				std::cout << "\t -O <output>      : Copy captured frame to a file or a V4L2 device"                                                   << std::endl;
 				std::cout << "\t -b <webroot>     : path to webroot" << std::endl;
-				std::cout << "\t -j               : enable JPEG snapshots from keyframes (accessible via /getSnapshot)" << std::endl;
+				std::cout << "\t -j [<filepath>]  : enable JPEG snapshots from keyframes (accessible via /snapshot, optionally save to file)" << std::endl;
+				std::cout << "\t -J <w>x<h>[x<i>] : MJPEG snapshot resolution and save interval (default 640x480x5, interval 1-60 seconds)" << std::endl;
 				
 				std::cout << "\t RTSP/RTP options"                                                                                                    << std::endl;
 				std::cout << "\t -I <addr>        : RTSP interface (default autodetect)"                                                              << std::endl;
@@ -238,11 +274,49 @@ int main(int argc, char** argv)
 	
 	// default format tries
 	if ((videoformatList.empty()) && (format!=0)) {
-		videoformatList.push_back(V4L2_PIX_FMT_HEVC);
-		videoformatList.push_back(V4L2_PIX_FMT_H264);
-		videoformatList.push_back(V4L2_PIX_FMT_MJPEG);
-		videoformatList.push_back(V4L2_PIX_FMT_JPEG);
-		videoformatList.push_back(V4L2_PIX_FMT_NV12);
+		// Get supported formats for the first device
+		std::string firstDevice = devList.empty() ? dev_name : devList.front();
+		
+		// Extract video device path if it contains ALSA part
+		std::string videoDev;
+		std::string audioDev;
+		decodeDevice(firstDevice, videoDev, audioDev);
+		
+		// Get supported formats from the actual device
+		std::list<unsigned int> deviceSupportedFormats = V4l2Device::getSupportedFormats(videoDev);
+		
+		// Define our preferred format order
+		std::list<unsigned int> preferredFormats = {
+			V4L2_PIX_FMT_H264,    // H264 is most common and efficient
+			V4L2_PIX_FMT_HEVC,    // HEVC/H265 if available
+			V4L2_PIX_FMT_MJPEG,   // MJPEG for compatibility
+			V4L2_PIX_FMT_JPEG,    // Plain JPEG
+			V4L2_PIX_FMT_NV12     // Raw format fallback
+		};
+		
+		// Add only supported formats in preferred order
+		for (unsigned int preferredFormat : preferredFormats) {
+			for (unsigned int supportedFormat : deviceSupportedFormats) {
+				if (preferredFormat == supportedFormat) {
+					videoformatList.push_back(preferredFormat);
+					break;
+				}
+			}
+		}
+		
+		// If no supported formats found, use the old default list as fallback
+		if (videoformatList.empty()) {
+			LOG(WARN) << "Could not detect supported formats for device " << videoDev << ", using default list";
+			videoformatList.push_back(V4L2_PIX_FMT_H264);
+			videoformatList.push_back(V4L2_PIX_FMT_MJPEG);
+			videoformatList.push_back(V4L2_PIX_FMT_JPEG);
+			videoformatList.push_back(V4L2_PIX_FMT_NV12);
+		} else {
+			LOG(INFO) << "Using device-supported formats for " << videoDev;
+			for (unsigned int fmt : videoformatList) {
+				LOG(INFO) << "  - " << V4l2Device::fourcc(fmt);
+			}
+		}
 	}
 
 #ifdef HAVE_ALSA	
@@ -307,11 +381,20 @@ int main(int argc, char** argv)
 			if (enableSnapshots && videoReplicator != NULL) {
 				SnapshotManager::getInstance().setEnabled(true);
 				SnapshotManager::getInstance().setFrameDimensions(width, height);
+				SnapshotManager::getInstance().setSnapshotResolution(snapshotWidth, snapshotHeight);
+				SnapshotManager::getInstance().setSaveInterval(snapshotSaveInterval);
+				
+				// Configure file saving if path specified
+				if (!snapshotFilePath.empty()) {
+					SnapshotManager::getInstance().setFilePath(snapshotFilePath);
+					LOG(NOTICE) << "Snapshot auto-save enabled to: " << snapshotFilePath << " (interval: " << snapshotSaveInterval << "s)";
+				}
+				
 				if (!SnapshotManager::getInstance().initializeWithDevice(videoDev)) {
 					LOG(WARN) << "Failed to fully initialize SnapshotManager - falling back to basic mode";
 				}
 				LOG(NOTICE) << "SnapshotManager mode: " << SnapshotManager::getInstance().getModeDescription();
-				LOG(NOTICE) << "Snapshots available at /getSnapshot";
+				LOG(NOTICE) << "Snapshots available at /snapshot";
 			}
 					
 			// Init Audio Capture
