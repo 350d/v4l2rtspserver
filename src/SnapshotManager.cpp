@@ -274,18 +274,33 @@ bool SnapshotManager::testDeviceForMJPEG(const std::string& devicePath) {
     memset(&fmt, 0, sizeof(fmt));
     fmt.type = hasM2M ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
     
+    bool foundJPEG = false;
+    bool foundMJPEG = false;
+    
     while (ioctl(fd, VIDIOC_ENUM_FMT, &fmt) == 0) {
         LOG(DEBUG) << "Device " << devicePath << " supports format: " << 
                       std::string((char*)&fmt.pixelformat, 4);
         
-        if (fmt.pixelformat == V4L2_PIX_FMT_MJPEG || 
-            fmt.pixelformat == V4L2_PIX_FMT_JPEG) {
-            LOG(INFO) << "Found MJPEG/JPEG capable device: " << devicePath << 
-                         " (card: " << cap.card << ")";
-            close(fd);
-            return true;
+        if (fmt.pixelformat == V4L2_PIX_FMT_JPEG) {
+            foundJPEG = true;
+        }
+        if (fmt.pixelformat == V4L2_PIX_FMT_MJPEG) {
+            foundMJPEG = true;
         }
         fmt.index++;
+    }
+    
+    if (foundJPEG || foundMJPEG) {
+        std::string formatType = foundJPEG ? "JPEG" : "MJPEG";
+        if (hasM2M) {
+            LOG(INFO) << "Found " << formatType << " M2M encoder device: " << devicePath << 
+                         " (card: " << cap.card << ") - requires special handling";
+        } else {
+            LOG(INFO) << "Found " << formatType << " capture device: " << devicePath << 
+                         " (card: " << cap.card << ")";
+        }
+        close(fd);
+        return !hasM2M; // Only return true for regular capture devices, not M2M
     }
     
     close(fd);
