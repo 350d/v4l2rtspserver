@@ -20,13 +20,13 @@ jobs:
         - buildtype: Debug
           system: armv6l
           crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard"
+          cmake_flags: "-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=softfp -marm"
           description: "Raspberry Pi Zero (Debug)"
           
         - buildtype: Release  
           system: armv6l
           crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=hard"
+          cmake_flags: "-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=softfp -marm"
           description: "Raspberry Pi Zero (Release)"
 
     name: Build for ${{ matrix.description }}
@@ -68,6 +68,10 @@ jobs:
       run: |
         mkdir -p build
         cd build
+        
+        echo "🔧 Configuring CMake for Raspberry Pi Zero ARMv6..."
+        echo "Compiler flags: ${{ matrix.cmake_flags }}"
+        
         cmake \
           -DCMAKE_BUILD_TYPE=${{ matrix.buildtype }} \
           -DCMAKE_SYSTEM_NAME=Linux \
@@ -89,6 +93,7 @@ jobs:
     - name: Build
       run: |
         cd build
+        echo "🏗️ Building v4l2rtspserver for Pi Zero..."
         make -j$(nproc)
         ls -la
 
@@ -97,6 +102,7 @@ jobs:
         cd build  
         
         # Try to create DEB package
+        echo "📦 Creating DEB package..."
         cpack || echo "DEB package creation failed, but binary should be ready"
         ls -la *.deb 2>/dev/null || echo "No DEB packages found"
         
@@ -130,12 +136,16 @@ jobs:
     - name: Test binary
       run: |
         cd build
-        echo "Testing binary architecture..."
+        echo "🔍 Testing binary architecture..."
         file ./v4l2rtspserver || echo "❌ Binary test failed"
         ${{ matrix.crosscompiler }}-readelf -h ./v4l2rtspserver || echo "❌ ReadELF test failed"
         
-        echo "Binary size:"
+        echo "📏 Binary size:"
         ls -lh ./v4l2rtspserver
+        
+        echo "🔧 Testing compiler compatibility..."
+        echo 'int main(){return 0;}' | ${{ matrix.crosscompiler }}-gcc ${{ matrix.cmake_flags }} -x c - -o test_compile
+        file test_compile
         
     - name: Create release archive
       run: |
@@ -158,6 +168,7 @@ jobs:
         echo "   - Archive: ${{ env.RELEASE_ARCHIVE }}"
         echo "   - Architecture: ${{ matrix.system }} (${{ matrix.crosscompiler }})"
         echo "   - Build type: ${{ matrix.buildtype }}"
+        echo "   - Compiler flags: ${{ matrix.cmake_flags }}"
         echo ""
         echo "🚀 To use on Raspberry Pi Zero:"
         echo "   1. Download the archive from this job"
@@ -165,6 +176,11 @@ jobs:
         echo "   3. Copy to Pi: scp v4l2rtspserver pi@raspberrypi.local:~/"
         echo "   4. Make executable: chmod +x v4l2rtspserver"
         echo "   5. Run: ./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0"
+        echo ""
+        echo "📋 Optimized settings for Pi Zero:"
+        echo "   - Low resolution: -W 320 -H 240 -F 10"
+        echo "   - MJPEG format: -f MJPG"
+        echo "   - With web interface: -w 8080"
         echo ""
         
         # Create a simple upload script for manual use
@@ -180,6 +196,8 @@ jobs:
         echo "💡 Quick start commands:" >> upload_instructions.txt
         echo "chmod +x v4l2rtspserver" >> upload_instructions.txt
         echo "./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0" >> upload_instructions.txt
+        echo "./v4l2rtspserver -W 640 -H 480 -F 15 -f MJPG /dev/video0  # Better quality" >> upload_instructions.txt
+        echo "./v4l2rtspserver -w 8080 -W 320 -H 240 -F 10 /dev/video0  # With web UI" >> upload_instructions.txt
         
         cat upload_instructions.txt
 
