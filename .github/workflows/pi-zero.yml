@@ -130,7 +130,7 @@ jobs:
     - name: Build
       run: |
         cd build
-        echo "::notice title=🏗️-Building::Building v4l2rtspserver for Pi Zero..."
+        echo "::notice title=🏗️ Building::Building v4l2rtspserver for Pi Zero..."
         make -j$(nproc)
         echo "::group::📁 Build artifacts"
         ls -la
@@ -152,23 +152,23 @@ jobs:
         # Copy binary and web files
         if [ -f "v4l2rtspserver" ]; then
           cp v4l2rtspserver ../artifacts/
-          echo "::notice title=✅-Binary::Binary copied successfully"
+          echo "::notice title=✅ Binary::Binary copied successfully"
         else
-          echo "::error title=❌-Binary::Binary not found!"
+          echo "::error title=❌ Binary::Binary not found!"
           exit 1
         fi
         
         # Copy web files (these should be in parent directory)
-        cp ../index.html ../artifacts/ 2>/dev/null || echo "::warning title=⚠️-Web-Files::index.html not found in parent directory"
-        cp ../hls.js ../artifacts/ 2>/dev/null || echo "::warning title=⚠️-Web-Files::hls.js not found in parent directory"
+        cp ../index.html ../artifacts/ 2>/dev/null || echo "::warning title=⚠️ Web Files::index.html not found in parent directory"
+        cp ../hls.js ../artifacts/ 2>/dev/null || echo "::warning title=⚠️ Web Files::hls.js not found in parent directory"
         
         # Copy DEB package if exists
         if ls *.deb 1> /dev/null 2>&1; then
           cp *.deb ../artifacts/
           echo "DEB_PACKAGE=$(ls *.deb | head -1)" >> $GITHUB_ENV
-          echo "::notice title=✅-DEB-Package::DEB package copied"
+          echo "::notice title=✅ DEB Package::DEB package copied"
         else
-          echo "::notice title=ℹ️-DEB-Package::No DEB package available"
+          echo "::notice title=ℹ️ DEB Package::No DEB package available"
         fi
         
         echo "ARTIFACT_NAME=v4l2rtspserver-${{ matrix.system }}-${{ matrix.buildtype }}" >> $GITHUB_ENV
@@ -198,9 +198,9 @@ jobs:
         
         if [ -f "test_compile" ]; then
           file test_compile
-          echo "::notice title=✅-Test-Result::Test compilation successful"
+          echo "::notice title=✅ Test Result::Test compilation successful"
         else
-          echo "::notice title=ℹ️-Test-Result::Test compilation failed, but main binary was built successfully"
+          echo "::notice title=ℹ️ Test Result::Test compilation failed, but main binary was built successfully"
         fi
         echo "::endgroup::"
 
@@ -212,7 +212,7 @@ jobs:
 
     - name: Upload to temporary storage (manual download)
       run: |
-        echo "::notice title=🎉-Build-Success::Build completed successfully!"
+        echo "::notice title=🎉 Build Success::Build completed successfully!"
         
         echo "::group::📁 Artifacts created"
         ls -la artifacts/
@@ -222,11 +222,11 @@ jobs:
         ls -la *.tar.gz
         echo "::endgroup::"
         
-        echo "::notice title=ℹ️-Artifact-Details::Name: ${{ env.ARTIFACT_NAME }}"
-        echo "::notice title=📦-Archive::${{ env.RELEASE_ARCHIVE }}"
-        echo "::notice title=🏗️-Architecture::${{ matrix.system }} (${{ matrix.crosscompiler }})"
-        echo "::notice title=🔧-Build-Type::${{ matrix.buildtype }}"
-        echo "::notice title=⚙️-Compiler-Flags::${{ matrix.cmake_flags }}"
+        echo "::notice title=ℹ️ Artifact Details::Name: ${{ env.ARTIFACT_NAME }}"
+        echo "::notice title=📦 Archive::${{ env.RELEASE_ARCHIVE }}"
+        echo "::notice title=🏗️ Architecture::${{ matrix.system }} (${{ matrix.crosscompiler }})"
+        echo "::notice title=🔧 Build Type::${{ matrix.buildtype }}"
+        echo "::notice title=⚙️ Compiler Flags::${{ matrix.cmake_flags }}"
         
         echo "::group::🚀 Usage Instructions for Raspberry Pi Zero"
         cat << 'EOF'
