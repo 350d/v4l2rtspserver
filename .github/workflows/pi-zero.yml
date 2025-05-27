@@ -20,13 +20,13 @@ jobs:
         - buildtype: Debug
           system: armv6l
           crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=softfp -marm"
+          cmake_flags: "-march=armv6 -mfloat-abi=soft"
           description: "Raspberry Pi Zero (Debug)"
           
         - buildtype: Release  
           system: armv6l
           crosscompiler: arm-linux-gnueabihf
-          cmake_flags: "-march=armv6zk -mcpu=arm1176jzf-s -mfpu=vfp -mfloat-abi=softfp -marm"
+          cmake_flags: "-march=armv6 -mfloat-abi=soft"
           description: "Raspberry Pi Zero (Release)"
 
     name: Build for ${{ matrix.description }}
@@ -181,7 +181,7 @@ jobs:
         echo "   - Low resolution: -W 320 -H 240 -F 10"
         echo "   - MJPEG format: -f MJPG"
         echo "   - With web interface: -w 8080"
-        echo ""
+        echo "   - Compatible with ARMv6 soft-float"
         
         # Create a simple upload script for manual use
         cat << 'EOF' > upload_instructions.txt
@@ -198,6 +198,8 @@ jobs:
         echo "./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0" >> upload_instructions.txt
         echo "./v4l2rtspserver -W 640 -H 480 -F 15 -f MJPG /dev/video0  # Better quality" >> upload_instructions.txt
         echo "./v4l2rtspserver -w 8080 -W 320 -H 240 -F 10 /dev/video0  # With web UI" >> upload_instructions.txt
+        echo "" >> upload_instructions.txt
+        echo "🔧 Compatibility: Built for ARMv6 with soft-float (Pi Zero compatible)" >> upload_instructions.txt
         
         cat upload_instructions.txt
 
