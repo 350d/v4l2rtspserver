@@ -69,6 +69,12 @@ public:
     std::string getModeDescription() const;
     bool hasRecentSnapshot() const;
     
+    // Device discovery methods
+    std::vector<std::string> findVideoDevices();
+    bool findRelatedMJPEGDevice(const std::string& baseDevice, std::string& mjpegDevice);
+    bool testDeviceForMJPEG(const std::string& devicePath);
+    bool tryInitializeMJPEGDevice(const std::string& primaryDevice);
+    
 private:
     SnapshotManager();
     ~SnapshotManager();
@@ -76,9 +82,6 @@ private:
     SnapshotManager& operator=(const SnapshotManager&) = delete;
     
     // Device management
-    bool tryInitializeMJPEGDevice(const std::string& primaryDevice);
-    bool findRelatedMJPEGDevice(const std::string& baseDevice, std::string& mjpegDevice);
-    std::vector<std::string> findVideoDevices();
     bool testDeviceFormats(const std::string& devicePath, bool& supportsH264, bool& supportsMJPEG);
     
     // Snapshot creation

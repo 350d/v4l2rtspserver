@@ -740,4 +740,58 @@ bool SnapshotManager::saveSnapshotToFile(const std::string& filePath) {
         LOG(ERROR) << "Exception while saving snapshot: " << e.what();
         return false;
     }
+}
+
+bool SnapshotManager::testDeviceForMJPEG(const std::string& devicePath) {
+    LOG(DEBUG) << "Testing device for MJPEG support: " << devicePath;
+    
+    int fd = open(devicePath.c_str(), O_RDWR);
+    if (fd < 0) {
+        LOG(DEBUG) << "Cannot open device: " << devicePath;
+        return false;
+    }
+    
+    struct v4l2_capability cap;
+    if (ioctl(fd, VIDIOC_QUERYCAP, &cap) < 0) {
+        LOG(DEBUG) << "Cannot query capabilities: " << devicePath;
+        close(fd);
+        return false;
+    }
+    
+    LOG(DEBUG) << "Device " << devicePath << " capabilities: 0x" << std::hex << cap.capabilities;
+    LOG(DEBUG) << "Device " << devicePath << " card: " << cap.card;
+    
+    // Check for Video Capture OR Memory-to-Memory capabilities
+    bool hasCapture = (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) || 
+                      (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE);
+    bool hasM2M = (cap.capabilities & V4L2_CAP_VIDEO_M2M) || 
+                  (cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE);
+    
+    if (!hasCapture && !hasM2M) {
+        LOG(DEBUG) << "Device " << devicePath << " doesn't support capture or M2M";
+        close(fd);
+        return false;
+    }
+    
+    // For M2M devices, check capture formats (output of the encoder)
+    struct v4l2_fmtdesc fmt;
+    memset(&fmt, 0, sizeof(fmt));
+    fmt.type = hasM2M ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    
+    while (ioctl(fd, VIDIOC_ENUM_FMT, &fmt) == 0) {
+        LOG(DEBUG) << "Device " << devicePath << " supports format: " << 
+                      std::string((char*)&fmt.pixelformat, 4);
+        
+        if (fmt.pixelformat == V4L2_PIX_FMT_MJPEG || 
+            fmt.pixelformat == V4L2_PIX_FMT_JPEG) {
+            LOG(INFO) << "Found MJPEG/JPEG capable device: " << devicePath << 
+                         " (card: " << cap.card << ")";
+            close(fd);
+            return true;
+        }
+        fmt.index++;
+    }
+    
+    close(fd);
+    return false;
 } 
