@@ -1,4 +1,4 @@
-name: C/C++ CI Cross-compilation for Raspberry Pi Zero
+name: Raspberry Pi Zero
 
 on:
   push:
