@@ -32,7 +32,7 @@ env:
 jobs:
   cross-compile-pi:
     name: "⚙️ ${{ matrix.config.name }}"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     
     strategy:
       fail-fast: false
