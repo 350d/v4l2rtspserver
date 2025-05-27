@@ -17,6 +17,7 @@
 // project
 #include "logger.h"
 #include "H264_V4l2DeviceSource.h"
+#include "SnapshotManager.h"
 
 // ---------------------------------
 // H264 V4L2 FramedSource
@@ -38,7 +39,13 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 		{
 			case 7: LOG(INFO) << "SPS size:" << size << " bufSize:" << bufSize; m_sps.assign((char*)buffer,size); break;
 			case 8: LOG(INFO) << "PPS size:" << size << " bufSize:" << bufSize; m_pps.assign((char*)buffer,size); break;
-			case 5: LOG(INFO) << "IDR size:" << size << " bufSize:" << bufSize; 
+			case 5: 
+				LOG(INFO) << "IDR size:" << size << " bufSize:" << bufSize; 
+				// Process H264 keyframe for snapshot if enabled
+				if (SnapshotManager::getInstance().isEnabled()) {
+					// Use stored dimensions from SnapshotManager
+					SnapshotManager::getInstance().processH264Keyframe(buffer, size, 0, 0);
+				}
 				if (m_repeatConfig && !m_sps.empty() && !m_pps.empty())
 				{
 					frameList.push_back(std::pair<unsigned char*,size_t>((unsigned char*)m_sps.c_str(), m_sps.size()));

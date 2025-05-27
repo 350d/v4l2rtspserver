@@ -14,6 +14,7 @@
 
 // project
 #include "H26x_V4l2DeviceSource.h"
+#include "SnapshotManager.h"
 
 class H264_V4L2DeviceSource : public H26X_V4L2DeviceSource
 {

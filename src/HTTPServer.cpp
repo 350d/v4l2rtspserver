@@ -15,11 +15,15 @@
 #include <sstream>
 #include <fstream>
 #include <algorithm>
+#include <cstring>
+#include <iostream>
 
 #include <time.h>
 #include "ByteStreamMemoryBufferSource.hh"
 
 #include "HTTPServer.h"
+#include "TSServerMediaSubsession.h"
+#include "SnapshotManager.h"
 
 u_int32_t HTTPServer::HTTPClientConnection::m_ClientSessionId = 0;
 
@@ -241,6 +245,30 @@ void HTTPServer::HTTPClientConnection::handleHTTPCmd_StreamingGET(char const* ur
 	}
 	else if (strncmp(urlSuffix, "getSnapshot", strlen("getSnapshot")) == 0) 
 	{
+		// Get snapshot from SnapshotManager
+		std::vector<unsigned char> snapshotData;
+		if (SnapshotManager::getInstance().getSnapshot(snapshotData) && !snapshotData.empty()) {
+			// Get MIME type from SnapshotManager
+			std::string mimeType = SnapshotManager::getInstance().getSnapshotMimeType();
+			
+			this->sendHeader(mimeType.c_str(), snapshotData.size());
+			// Create string from vector data
+			std::string snapshotString(snapshotData.begin(), snapshotData.end());
+			this->streamSource(snapshotString);
+		} else {
+			// No snapshot available
+			std::ostringstream os;
+			os << "Snapshot Status:\n";
+			os << "Mode: " << SnapshotManager::getInstance().getModeDescription() << "\n";
+			os << "Recent snapshot: " << (SnapshotManager::getInstance().hasRecentSnapshot() ? "Yes" : "No") << "\n";
+			if (!SnapshotManager::getInstance().isEnabled()) {
+				os << "Snapshots are disabled. Use -j parameter to enable.\n";
+			}
+			
+			std::string errorMsg = os.str();
+			this->sendHeader("text/plain", errorMsg.size());
+			this->streamSource(errorMsg);
+		}
 	}
 	else if (strncmp(urlSuffix, "getStreamList", strlen("getStreamList")) == 0) 
 	{

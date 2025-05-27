@@ -33,6 +33,7 @@
 
 #include "V4l2RTSPServer.h"
 #include "DeviceSourceFactory.h"
+#include "SnapshotManager.h"
 
 
 // -----------------------------------------
@@ -101,6 +102,7 @@ int main(int argc, char** argv)
 	const char* realm = NULL;
 	std::list<std::string> userPasswordList;
 	std::string webroot;
+	bool enableSnapshots = false;
 #ifdef HAVE_ALSA	
 	int audioFreq = 44100;
 	int audioNbChannels = 2;
@@ -114,7 +116,7 @@ int main(int argc, char** argv)
 
 	// decode parameters
 	int c = 0;     
-	while ((c = getopt (argc, argv, "v::Q:O:b:" "I:P:p:m::u:M::ct:S::x:X" "R:U:" "rwBsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
+	while ((c = getopt (argc, argv, "v::Q:O:b:j" "I:P:p:m::u:M::ct:S::x:X" "R:U:" "rwBsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
 	{
 		switch (c)
 		{
@@ -122,6 +124,7 @@ int main(int argc, char** argv)
 			case 'Q':	queueSize  = atoi(optarg); break;
 			case 'O':	outputFile = optarg; break;
 			case 'b':	webroot = optarg; break;
+			case 'j':	enableSnapshots = true; break;
 			
 			// RTSP/RTP
 			case 'I':       ReceivingInterfaceAddr  = inet_addr(optarg); break;
@@ -178,6 +181,7 @@ int main(int argc, char** argv)
 				std::cout << "\t -Q <length>      : Number of frame queue  (default "<< queueSize << ")"                                              << std::endl;
 				std::cout << "\t -O <output>      : Copy captured frame to a file or a V4L2 device"                                                   << std::endl;
 				std::cout << "\t -b <webroot>     : path to webroot" << std::endl;
+				std::cout << "\t -j               : enable JPEG snapshots from keyframes (accessible via /getSnapshot)" << std::endl;
 				
 				std::cout << "\t RTSP/RTP options"                                                                                                    << std::endl;
 				std::cout << "\t -I <addr>        : RTSP interface (default autodetect)"                                                              << std::endl;
@@ -297,6 +301,17 @@ int main(int argc, char** argv)
 					output, ioTypeOut, out);
 			if (out != NULL) {
 				outList.push_back(out);
+			}
+			
+			// Initialize snapshot manager if enabled
+			if (enableSnapshots && videoReplicator != NULL) {
+				SnapshotManager::getInstance().setEnabled(true);
+				SnapshotManager::getInstance().setFrameDimensions(width, height);
+				if (!SnapshotManager::getInstance().initializeWithDevice(videoDev)) {
+					LOG(WARN) << "Failed to fully initialize SnapshotManager - falling back to basic mode";
+				}
+				LOG(NOTICE) << "SnapshotManager mode: " << SnapshotManager::getInstance().getModeDescription();
+				LOG(NOTICE) << "Snapshots available at /getSnapshot";
 			}
 					
 			// Init Audio Capture
