@@ -212,7 +212,7 @@ jobs:
 
     - name: Upload to temporary storage (manual download)
       run: |
-        echo "::notice title=✅ Build Success::Build completed successfully!"
+        echo "::notice::✅ Build completed successfully!"
         
         echo "::group::📁 Artifacts created"
         ls -la artifacts/
