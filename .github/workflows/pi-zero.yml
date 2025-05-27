@@ -32,7 +32,7 @@ env:
 jobs:
   cross-compile-pi:
     name: "⚙️ ${{ matrix.config.name }}"
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     
     strategy:
       fail-fast: false
@@ -43,7 +43,8 @@ jobs:
             arch: "armv6"
             cc: "arm-linux-gnueabi-gcc"
             cxx: "arm-linux-gnueabi-g++"
-            cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=soft -O2 -g0 -DNDEBUG -static"
+            cflags: "-march=armv6 -mfpu=vfp -mfloat-abi=soft -O2 -g0 -DNDEBUG -static -D_GNU_SOURCE"
+            ldflags: "-static -Wl,--gc-sections"
             target: "pi-zero"
             description: "Raspberry Pi Zero/Zero W"
             parallel_jobs: "2"
@@ -158,6 +159,11 @@ jobs:
         echo "CFLAGS=$C_FULL_FLAGS" >> $GITHUB_ENV
         echo "CXXFLAGS=$CXX_FULL_FLAGS" >> $GITHUB_ENV
         
+        # Set linker flags if specified
+        if [ -n "${{ matrix.config.ldflags }}" ]; then
+          echo "LDFLAGS=${{ matrix.config.ldflags }}" >> $GITHUB_ENV
+        fi
+        
         # Test compiler
         echo 'int main(){return 0;}' > test_compile.c
         if ${{ matrix.config.cc }} $C_FULL_FLAGS test_compile.c -o test_compile; then
@@ -192,6 +198,7 @@ jobs:
           -DCMAKE_CXX_COMPILER=${{ env.CXX }} \
           -DCMAKE_C_FLAGS="${{ env.CFLAGS }}" \
           -DCMAKE_CXX_FLAGS="${{ env.CXXFLAGS }}" \
+          -DCMAKE_EXE_LINKER_FLAGS="${{ env.LDFLAGS }}" \
           -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
           -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
           -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
