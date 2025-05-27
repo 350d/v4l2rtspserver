@@ -149,14 +149,18 @@ jobs:
         fi
         
         # Set compilation flags with comprehensive warning suppression for live555
-        WARNING_FLAGS="-Wno-format -Wno-format-overflow -Wno-format-security -Wno-stringop-overflow -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -Wno-cast-function-type -Wno-unused-variable -Wno-unused-parameter -Wno-sign-compare -Wno-maybe-uninitialized"
-        FULL_FLAGS="${{ matrix.config.cflags }} $WARNING_FLAGS"
-        echo "CFLAGS=$FULL_FLAGS" >> $GITHUB_ENV
-        echo "CXXFLAGS=$FULL_FLAGS" >> $GITHUB_ENV
+        C_WARNING_FLAGS="-Wno-format -Wno-format-overflow -Wno-format-security -Wno-stringop-overflow -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -Wno-cast-function-type -Wno-unused-variable -Wno-unused-parameter -Wno-sign-compare -Wno-maybe-uninitialized"
+        CXX_WARNING_FLAGS="-Wno-format -Wno-format-overflow -Wno-format-security -Wno-stringop-overflow -Wno-int-to-pointer-cast -Wno-cast-function-type -Wno-unused-variable -Wno-unused-parameter -Wno-sign-compare -Wno-maybe-uninitialized"
+        
+        C_FULL_FLAGS="${{ matrix.config.cflags }} $C_WARNING_FLAGS"
+        CXX_FULL_FLAGS="${{ matrix.config.cflags }} $CXX_WARNING_FLAGS"
+        
+        echo "CFLAGS=$C_FULL_FLAGS" >> $GITHUB_ENV
+        echo "CXXFLAGS=$CXX_FULL_FLAGS" >> $GITHUB_ENV
         
         # Test compiler
         echo 'int main(){return 0;}' > test_compile.c
-        if ${{ matrix.config.cc }} $FULL_FLAGS test_compile.c -o test_compile; then
+        if ${{ matrix.config.cc }} $C_FULL_FLAGS test_compile.c -o test_compile; then
           echo "✅ Compiler test successful for ${{ matrix.config.name }}"
           file test_compile
         else
