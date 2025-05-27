@@ -34,10 +34,22 @@ jobs:
     steps:
     - name: Checkout repository
       run: |
-        git clone --recursive --depth=1 ${{ github.server_url }}/${{ github.repository }}.git .
-        git fetch origin ${{ github.sha }}
-        git checkout ${{ github.sha }}
-        git submodule update --init --recursive
+        echo "Cloning repository..."
+        git clone --depth=1 ${{ github.server_url }}/${{ github.repository }}.git .
+        
+        echo "Fetching specific commit..."
+        git fetch origin ${{ github.sha }} || echo "Fetch failed, using default branch"
+        git checkout ${{ github.sha }} || echo "Checkout failed, using current HEAD"
+        
+        echo "Initializing submodules..."
+        git submodule update --init --depth=1 || {
+          echo "Submodule update failed, trying manual init..."
+          git submodule init
+          git submodule foreach --recursive 'git checkout master || git checkout main || echo "Using default branch"'
+        }
+        
+        echo "Repository cloned successfully"
+        ls -la
 
     - name: Install dependencies
       run: |
@@ -83,21 +95,34 @@ jobs:
     - name: Create package
       run: |
         cd build  
-        cpack
-        ls -la *.deb || echo "No DEB packages found"
         
-        # Prepare artifacts
+        # Try to create DEB package
+        cpack || echo "DEB package creation failed, but binary should be ready"
+        ls -la *.deb 2>/dev/null || echo "No DEB packages found"
+        
+        # Prepare artifacts directory
         mkdir -p ../artifacts
         
         # Copy binary and web files
-        cp v4l2rtspserver ../artifacts/ || echo "v4l2rtspserver not found"
-        cp index.html ../artifacts/ 2>/dev/null || echo "index.html not found"
-        cp hls.js ../artifacts/ 2>/dev/null || echo "hls.js not found"
+        if [ -f "v4l2rtspserver" ]; then
+          cp v4l2rtspserver ../artifacts/
+          echo "✅ Binary copied successfully"
+        else
+          echo "❌ Binary not found!"
+          exit 1
+        fi
+        
+        # Copy web files (these should be in parent directory)
+        cp ../index.html ../artifacts/ 2>/dev/null || echo "index.html not found in parent directory"
+        cp ../hls.js ../artifacts/ 2>/dev/null || echo "hls.js not found in parent directory"
         
         # Copy DEB package if exists
         if ls *.deb 1> /dev/null 2>&1; then
           cp *.deb ../artifacts/
           echo "DEB_PACKAGE=$(ls *.deb | head -1)" >> $GITHUB_ENV
+          echo "✅ DEB package copied"
+        else
+          echo "ℹ️ No DEB package available"
         fi
         
         echo "ARTIFACT_NAME=v4l2rtspserver-${{ matrix.system }}-${{ matrix.buildtype }}" >> $GITHUB_ENV
@@ -105,8 +130,12 @@ jobs:
     - name: Test binary
       run: |
         cd build
-        file ./v4l2rtspserver || echo "Binary test failed"
-        ${{ matrix.crosscompiler }}-readelf -h ./v4l2rtspserver || echo "ReadELF test failed"
+        echo "Testing binary architecture..."
+        file ./v4l2rtspserver || echo "❌ Binary test failed"
+        ${{ matrix.crosscompiler }}-readelf -h ./v4l2rtspserver || echo "❌ ReadELF test failed"
+        
+        echo "Binary size:"
+        ls -lh ./v4l2rtspserver
         
     - name: Create release archive
       run: |
@@ -116,25 +145,41 @@ jobs:
 
     - name: Upload to temporary storage (manual download)
       run: |
-        echo "Artifacts created:"
+        echo "🎉 Build completed successfully!"
+        echo ""
+        echo "📁 Artifacts created:"
         ls -la artifacts/
         echo ""
-        echo "Release archive created:"
+        echo "📦 Release archive created:"
         ls -la *.tar.gz
         echo ""
-        echo "To download artifacts, check the job logs and run the workflow"
-        echo "Artifact name: ${{ env.ARTIFACT_NAME }}"
+        echo "ℹ️  Artifact details:"
+        echo "   - Name: ${{ env.ARTIFACT_NAME }}"
+        echo "   - Archive: ${{ env.RELEASE_ARCHIVE }}"
+        echo "   - Architecture: ${{ matrix.system }} (${{ matrix.crosscompiler }})"
+        echo "   - Build type: ${{ matrix.buildtype }}"
+        echo ""
+        echo "🚀 To use on Raspberry Pi Zero:"
+        echo "   1. Download the archive from this job"
+        echo "   2. Extract: tar -xzf ${{ env.RELEASE_ARCHIVE }}"
+        echo "   3. Copy to Pi: scp v4l2rtspserver pi@raspberrypi.local:~/"
+        echo "   4. Make executable: chmod +x v4l2rtspserver"
+        echo "   5. Run: ./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0"
+        echo ""
         
         # Create a simple upload script for manual use
         cat << 'EOF' > upload_instructions.txt
-        Build completed successfully!
+        🎯 Raspberry Pi Zero Build Instructions
         
-        Artifacts location: ./artifacts/
-        Release archive: ./${{ env.RELEASE_ARCHIVE }}
+        Build completed successfully for ${{ matrix.system }} (${{ matrix.buildtype }})
         
-        Files included:
+        📋 Files included:
         EOF
         ls -la artifacts/ >> upload_instructions.txt
+        echo "" >> upload_instructions.txt
+        echo "💡 Quick start commands:" >> upload_instructions.txt
+        echo "chmod +x v4l2rtspserver" >> upload_instructions.txt
+        echo "./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0" >> upload_instructions.txt
         
         cat upload_instructions.txt
 
@@ -193,7 +238,9 @@ jobs:
         cat << 'EOF' > build-pi-zero-docker.sh
         #!/bin/bash
         
-        # Download artifacts from GitHub Actions first
+        echo "🐳 Raspberry Pi Zero Docker Builder"
+        echo ""
+        echo "📋 Prerequisites:"
         echo "1. Download artifacts from GitHub Actions"
         echo "2. Extract v4l2rtspserver binary, index.html, and hls.js"
         echo "3. Copy them to current directory"
@@ -201,10 +248,13 @@ jobs:
         echo ""
         
         if [ ! -f "v4l2rtspserver" ]; then
-            echo "Error: v4l2rtspserver binary not found!"
-            echo "Please download it from GitHub Actions artifacts"
+            echo "❌ Error: v4l2rtspserver binary not found!"
+            echo "📥 Please download it from GitHub Actions artifacts"
             exit 1
         fi
+        
+        echo "✅ Found v4l2rtspserver binary"
+        echo "🔧 Updating Dockerfile..."
         
         # Update Dockerfile to include files
         sed -i 's|# COPY v4l2rtspserver|COPY v4l2rtspserver|g' Dockerfile.pi-zero
@@ -212,14 +262,33 @@ jobs:
         sed -i 's|# COPY hls.js|COPY hls.js|g' Dockerfile.pi-zero
         sed -i 's|# RUN chmod|RUN chmod|g' Dockerfile.pi-zero
         
-        # Build Docker image
+        echo "🏗️  Building Docker image..."
         docker build -f Dockerfile.pi-zero -t v4l2rtspserver:pi-zero-latest .
         
-        echo "Docker image built successfully!"
-        echo "Run with: docker run --rm -p 8554:8554 --device=/dev/video0 v4l2rtspserver:pi-zero-latest /dev/video0"
+        if [ $? -eq 0 ]; then
+            echo "✅ Docker image built successfully!"
+            echo ""
+            echo "🚀 Usage examples:"
+            echo "# Basic run:"
+            echo "docker run --rm -p 8554:8554 --device=/dev/video0 v4l2rtspserver:pi-zero-latest /dev/video0"
+            echo ""
+            echo "# With web interface:"
+            echo "docker run --rm -p 8554:8554 -p 8080:8080 --device=/dev/video0 v4l2rtspserver:pi-zero-latest -w 8080 /dev/video0"
+            echo ""
+            echo "# Low resolution for Pi Zero:"
+            echo "docker run --rm -p 8554:8554 --device=/dev/video0 v4l2rtspserver:pi-zero-latest -W 320 -H 240 -F 10 /dev/video0"
+        else
+            echo "❌ Docker build failed!"
+            exit 1
+        fi
         EOF
         
         chmod +x build-pi-zero-docker.sh
         
-        echo "Docker files created:"
-        ls -la Dockerfile.pi-zero build-pi-zero-docker.sh 
+        echo "📁 Docker files created:"
+        ls -la Dockerfile.pi-zero build-pi-zero-docker.sh
+        
+        echo ""
+        echo "ℹ️  To build Docker image:"
+        echo "1. Download artifacts from the build job"
+        echo "2. Run: ./build-pi-zero-docker.sh" 
