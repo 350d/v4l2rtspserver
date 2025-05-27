@@ -105,6 +105,7 @@ private:
     // MJPEG device for separate capture
     std::unique_ptr<V4l2Capture> m_mjpegDevice;
     std::string m_mjpegDevicePath;
+    std::string m_primaryDevicePath;
     
     // File operations
     std::string m_filePath;

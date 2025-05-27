@@ -82,6 +82,9 @@ bool SnapshotManager::initializeWithDevice(const std::string& primaryDevice) {
     
     LOG(INFO) << "Initializing snapshot manager for device: " << primaryDevice;
     
+    // Store primary device path for later use
+    m_primaryDevicePath = primaryDevice;
+    
     // First check what formats the primary device supports
     bool supportsH264 = false;
     bool supportsMJPEG = false;
@@ -249,10 +252,25 @@ void SnapshotManager::processH264KeyframeWithSPS(const unsigned char* h264Data, 
         }
     }
     
-    // If we have SPS/PPS data, create MP4 snapshot
-    if (!sps.empty() && !pps.empty()) {
+    // For MJPEG_STREAM mode, try to find and use a separate MJPEG device
+    if (m_mode == SnapshotMode::MJPEG_STREAM) {
+        // Try to initialize MJPEG device on first H264 keyframe
+        if (tryInitializeMJPEGDevice(m_primaryDevicePath)) {
+            m_mode = SnapshotMode::MJPEG_DEVICE;
+            LOG(NOTICE) << "Upgraded to MJPEG device mode for real snapshots";
+            if (captureMJPEGSnapshot()) {
+                return; // Successfully captured real MJPEG snapshot
+            }
+        }
+        
+        // If no MJPEG device available, create informational snapshot instead of MP4
+        createH264InfoSnapshot(dataSize, width, height);
+        return;
+    }
+    
+    // Only create MP4 snapshots if explicitly in H264_MP4 mode
+    if (m_mode == SnapshotMode::H264_MP4 && !sps.empty() && !pps.empty()) {
         createH264MP4Snapshot(h264Data, dataSize, sps, pps, width, height);
-        m_mode = SnapshotMode::H264_MP4;
     } else {
         // Fallback to SVG info snapshot
         createH264InfoSnapshot(dataSize, width, height);
