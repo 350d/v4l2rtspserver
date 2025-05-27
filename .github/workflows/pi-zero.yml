@@ -248,6 +248,34 @@ jobs:
         • Auto-detected ABI: hard-float or soft-float
         EOF
         echo "::endgroup::"
+        
+        echo "::group::📥 Download Links"
+        echo "🔗 Artifacts will be available at:"
+        echo "   https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        echo ""
+        echo "📦 Look for artifact: ${{ env.ARTIFACT_NAME }}"
+        echo "📁 Contains: v4l2rtspserver binary, web files, and DEB package (if available)"
+        echo ""
+        echo "⏰ Artifacts are kept for 90 days by default"
+        echo "::endgroup::"
+
+    - name: Upload artifacts to GitHub Actions
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: |
+          artifacts/
+          *.tar.gz
+        retention-days: 90
+        if-no-files-found: error
+
+    - name: Upload binary only (quick download)
+      uses: actions/upload-artifact@v4
+      with:
+        name: v4l2rtspserver-binary-${{ matrix.system }}-${{ matrix.buildtype }}
+        path: artifacts/v4l2rtspserver
+        retention-days: 90
+        if-no-files-found: error
 
   create-docker-files:
     runs-on: ubuntu-latest
