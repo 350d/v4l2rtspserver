@@ -115,6 +115,7 @@ bool SnapshotManager::tryInitializeMJPEGDevice(const std::string& primaryDevice)
     
     // Try to find a related MJPEG device
     if (!findRelatedMJPEGDevice(primaryDevice, mjpegDevice)) {
+        LOG(INFO) << "No related MJPEG device found for " << primaryDevice;
         return false;
     }
     
@@ -132,11 +133,13 @@ bool SnapshotManager::tryInitializeMJPEGDevice(const std::string& primaryDevice)
         if (device && device->isReady()) {
             m_mjpegDevice = std::move(device);
             m_mjpegDevicePath = mjpegDevice;
-            LOG(INFO) << "Successfully initialized MJPEG snapshot device: " << mjpegDevice;
+            LOG(NOTICE) << "Successfully initialized MJPEG snapshot device: " << mjpegDevice;
             return true;
+        } else {
+            LOG(WARN) << "Failed to create or ready MJPEG device: " << mjpegDevice;
         }
     } catch (const std::exception& e) {
-        LOG(ERROR) << "Failed to initialize MJPEG device: " << e.what();
+        LOG(ERROR) << "Failed to initialize MJPEG device " << mjpegDevice << ": " << e.what();
     }
     
     return false;
@@ -145,25 +148,42 @@ bool SnapshotManager::tryInitializeMJPEGDevice(const std::string& primaryDevice)
 bool SnapshotManager::findRelatedMJPEGDevice(const std::string& baseDevice, std::string& mjpegDevice) {
     // Extract base device number (e.g., "/dev/video0" -> 0)
     size_t pos = baseDevice.find_last_not_of("0123456789");
-    if (pos == std::string::npos) return false;
+    if (pos == std::string::npos) {
+        LOG(WARN) << "Cannot extract device number from: " << baseDevice;
+        return false;
+    }
     
     std::string baseNum = baseDevice.substr(pos + 1);
     int baseDeviceNum = std::stoi(baseNum);
+    
+    LOG(INFO) << "Searching for MJPEG devices related to " << baseDevice << " (base number: " << baseDeviceNum << ")";
     
     // Check consecutive device numbers (many Pi cameras create video0, video1, etc.)
     for (int offset = 1; offset <= 3; offset++) {
         std::string candidatePath = "/dev/video" + std::to_string(baseDeviceNum + offset);
         
+        LOG(DEBUG) << "Checking candidate device: " << candidatePath;
+        
         if (access(candidatePath.c_str(), F_OK) == 0) {
+            LOG(INFO) << "Device exists: " << candidatePath;
             bool supportsH264, supportsMJPEG;
-            if (testDeviceFormats(candidatePath, supportsH264, supportsMJPEG) && supportsMJPEG) {
-                LOG(INFO) << "Found related MJPEG device: " << candidatePath;
-                mjpegDevice = candidatePath;
-                return true;
+            if (testDeviceFormats(candidatePath, supportsH264, supportsMJPEG)) {
+                LOG(INFO) << "Device " << candidatePath << " - H264: " << (supportsH264 ? "YES" : "NO") 
+                         << ", MJPEG: " << (supportsMJPEG ? "YES" : "NO");
+                if (supportsMJPEG) {
+                    LOG(NOTICE) << "Found related MJPEG device: " << candidatePath;
+                    mjpegDevice = candidatePath;
+                    return true;
+                }
+            } else {
+                LOG(WARN) << "Failed to test formats for device: " << candidatePath;
             }
+        } else {
+            LOG(DEBUG) << "Device does not exist: " << candidatePath;
         }
     }
     
+    LOG(INFO) << "No related MJPEG device found for " << baseDevice;
     return false;
 }
 
@@ -375,6 +395,36 @@ bool SnapshotManager::getSnapshot(std::vector<unsigned char>& jpegData) {
 }
 
 std::string SnapshotManager::getSnapshotMimeType() const {
+    std::lock_guard<std::mutex> lock(m_snapshotMutex);
+    
+    // Check actual content type if we have data
+    if (!m_currentSnapshot.empty()) {
+        // Check for JPEG magic bytes (FF D8 FF)
+        if (m_currentSnapshot.size() >= 3 && 
+            m_currentSnapshot[0] == 0xFF && 
+            m_currentSnapshot[1] == 0xD8 && 
+            m_currentSnapshot[2] == 0xFF) {
+            return "image/jpeg";
+        }
+        
+        // Check for SVG content (starts with "<?xml" or "<svg")
+        if (m_currentSnapshot.size() >= 5) {
+            std::string start(m_currentSnapshot.begin(), m_currentSnapshot.begin() + 5);
+            if (start == "<?xml" || start == "<svg ") {
+                return "image/svg+xml";
+            }
+        }
+        
+        // Check for MP4 magic bytes (ftyp)
+        if (m_currentSnapshot.size() >= 8) {
+            std::string ftyp(m_currentSnapshot.begin() + 4, m_currentSnapshot.begin() + 8);
+            if (ftyp == "ftyp") {
+                return "video/mp4";
+            }
+        }
+    }
+    
+    // Fallback to mode-based detection
     switch (m_mode) {
         case SnapshotMode::MJPEG_STREAM:
         case SnapshotMode::MJPEG_DEVICE:
