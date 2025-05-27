@@ -126,18 +126,21 @@ jobs:
     - name: Build
       run: |
         cd build
-        echo "🏗️ Building v4l2rtspserver for Pi Zero..."
+        echo "::notice title=🏗️ Building::Building v4l2rtspserver for Pi Zero..."
         make -j$(nproc)
+        echo "::group::📁 Build artifacts"
         ls -la
+        echo "::endgroup::"
 
     - name: Create package
       run: |
         cd build  
         
         # Try to create DEB package
-        echo "📦 Creating DEB package..."
+        echo "::group::📦 Creating DEB package"
         cpack || echo "DEB package creation failed, but binary should be ready"
         ls -la *.deb 2>/dev/null || echo "No DEB packages found"
+        echo "::endgroup::"
         
         # Prepare artifacts directory
         mkdir -p ../artifacts
@@ -145,23 +148,23 @@ jobs:
         # Copy binary and web files
         if [ -f "v4l2rtspserver" ]; then
           cp v4l2rtspserver ../artifacts/
-          echo "✅ Binary copied successfully"
+          echo "::notice title=✅ Binary::Binary copied successfully"
         else
-          echo "❌ Binary not found!"
+          echo "::error title=❌ Binary::Binary not found!"
           exit 1
         fi
         
         # Copy web files (these should be in parent directory)
-        cp ../index.html ../artifacts/ 2>/dev/null || echo "index.html not found in parent directory"
-        cp ../hls.js ../artifacts/ 2>/dev/null || echo "hls.js not found in parent directory"
+        cp ../index.html ../artifacts/ 2>/dev/null || echo "::warning title=⚠️ Web Files::index.html not found in parent directory"
+        cp ../hls.js ../artifacts/ 2>/dev/null || echo "::warning title=⚠️ Web Files::hls.js not found in parent directory"
         
         # Copy DEB package if exists
         if ls *.deb 1> /dev/null 2>&1; then
           cp *.deb ../artifacts/
           echo "DEB_PACKAGE=$(ls *.deb | head -1)" >> $GITHUB_ENV
-          echo "✅ DEB package copied"
+          echo "::notice title=✅ DEB Package::DEB package copied"
         else
-          echo "ℹ️ No DEB package available"
+          echo "::notice title=ℹ️ DEB Package::No DEB package available"
         fi
         
         echo "ARTIFACT_NAME=v4l2rtspserver-${{ matrix.system }}-${{ matrix.buildtype }}" >> $GITHUB_ENV
@@ -169,30 +172,33 @@ jobs:
     - name: Test binary
       run: |
         cd build
-        echo "🔍 Testing binary architecture..."
+        echo "::group::🔍 Testing binary architecture"
         file ./v4l2rtspserver || echo "❌ Binary test failed"
         ${{ matrix.crosscompiler }}-readelf -h ./v4l2rtspserver || echo "❌ ReadELF test failed"
+        echo "::endgroup::"
         
-        echo "📏 Binary size:"
+        echo "::group::📏 Binary size"
         ls -lh ./v4l2rtspserver
+        echo "::endgroup::"
         
-        echo "🔧 Testing compiler compatibility..."
+        echo "::group::🔧 Testing compiler compatibility"
         # Use the same flags that were actually used in compilation
         COMPILER="${{ env.ACTUAL_COMPILER }}"
         FLAGS="${{ env.ACTUAL_FLAGS }}"
         
-        echo "Using compiler: $COMPILER"
-        echo "Using flags: $FLAGS"
+        printf "Using compiler: %s\n" "$COMPILER"
+        printf "Using flags: %s\n" "$FLAGS"
         
         # Test compiler with simple program using correct flags
         echo 'int main(){return 0;}' | $COMPILER $FLAGS -x c - -o test_compile || echo "⚠️ Compiler test failed (expected for some configurations)"
         
         if [ -f "test_compile" ]; then
           file test_compile
-          echo "✅ Test compilation successful"
+          echo "::notice title=✅ Test Result::Test compilation successful"
         else
-          echo "ℹ️ Test compilation failed, but main binary was built successfully"
+          echo "::notice title=ℹ️ Test Result::Test compilation failed, but main binary was built successfully"
         fi
+        echo "::endgroup::"
 
     - name: Create release archive
       run: |
@@ -202,53 +208,40 @@ jobs:
 
     - name: Upload to temporary storage (manual download)
       run: |
-        echo "🎉 Build completed successfully!"
-        echo ""
-        echo "📁 Artifacts created:"
+        echo "::notice title=🎉 Build Success::Build completed successfully!"
+        
+        echo "::group::📁 Artifacts created"
         ls -la artifacts/
-        echo ""
-        echo "📦 Release archive created:"
+        echo "::endgroup::"
+        
+        echo "::group::📦 Release archive created"
         ls -la *.tar.gz
-        echo ""
-        echo "ℹ️  Artifact details:"
-        echo "   - Name: ${{ env.ARTIFACT_NAME }}"
-        echo "   - Archive: ${{ env.RELEASE_ARCHIVE }}"
-        echo "   - Architecture: ${{ matrix.system }} (${{ matrix.crosscompiler }})"
-        echo "   - Build type: ${{ matrix.buildtype }}"
-        echo "   - Compiler flags: ${{ matrix.cmake_flags }}"
-        echo ""
-        echo "🚀 To use on Raspberry Pi Zero:"
-        echo "   1. Download the archive from this job"
-        echo "   2. Extract: tar -xzf ${{ env.RELEASE_ARCHIVE }}"
-        echo "   3. Copy to Pi: scp v4l2rtspserver pi@raspberrypi.local:~/"
-        echo "   4. Make executable: chmod +x v4l2rtspserver"
-        echo "   5. Run: ./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0"
-        echo ""
-        echo "📋 Optimized settings for Pi Zero:"
-        echo "   - Low resolution: -W 320 -H 240 -F 10"
-        echo "   - MJPEG format: -f MJPG"
-        echo "   - With web interface: -w 8080"
-        echo "   - Auto-detected ABI: hard-float or soft-float"
+        echo "::endgroup::"
         
-        # Create a simple upload script for manual use
-        cat << 'EOF' > upload_instructions.txt
-        🎯 Raspberry Pi Zero Build Instructions
+        echo "::notice title=ℹ️ Artifact Details::Name: ${{ env.ARTIFACT_NAME }}"
+        echo "::notice title=📦 Archive::${{ env.RELEASE_ARCHIVE }}"
+        echo "::notice title=🏗️ Architecture::${{ matrix.system }} (${{ matrix.crosscompiler }})"
+        echo "::notice title=🔧 Build Type::${{ matrix.buildtype }}"
+        echo "::notice title=⚙️ Compiler Flags::${{ matrix.cmake_flags }}"
         
-        Build completed successfully for ${{ matrix.system }} (${{ matrix.buildtype }})
-        
-        📋 Files included:
+        echo "::group::🚀 Usage Instructions for Raspberry Pi Zero"
+        cat << 'EOF'
+        1. Download the archive from this job
+        2. Extract: tar -xzf ${{ env.RELEASE_ARCHIVE }}
+        3. Copy to Pi: scp v4l2rtspserver pi@raspberrypi.local:~/
+        4. Make executable: chmod +x v4l2rtspserver
+        5. Run: ./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0
         EOF
-        ls -la artifacts/ >> upload_instructions.txt
-        echo "" >> upload_instructions.txt
-        echo "💡 Quick start commands:" >> upload_instructions.txt
-        echo "chmod +x v4l2rtspserver" >> upload_instructions.txt
-        echo "./v4l2rtspserver -W 320 -H 240 -F 10 /dev/video0" >> upload_instructions.txt
-        echo "./v4l2rtspserver -W 640 -H 480 -F 15 -f MJPG /dev/video0  # Better quality" >> upload_instructions.txt
-        echo "./v4l2rtspserver -w 8080 -W 320 -H 240 -F 10 /dev/video0  # With web UI" >> upload_instructions.txt
-        echo "" >> upload_instructions.txt
-        echo "🔧 Compatibility: Built for ARMv6 with auto-detected ABI (Pi Zero compatible)" >> upload_instructions.txt
+        echo "::endgroup::"
         
-        cat upload_instructions.txt
+        echo "::group::📋 Optimized Settings for Pi Zero"
+        cat << 'EOF'
+        • Low resolution: -W 320 -H 240 -F 10
+        • MJPEG format: -f MJPG
+        • With web interface: -w 8080
+        • Auto-detected ABI: hard-float or soft-float
+        EOF
+        echo "::endgroup::"
 
   create-docker-files:
     runs-on: ubuntu-latest
