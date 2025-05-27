@@ -212,7 +212,18 @@ jobs:
 
     - name: Upload to temporary storage (manual download)
       run: |
+        # Disable command echoing for notices
+        set +x
+        
         echo "::notice title=Build Status::✅ Build completed successfully!"
+        echo "::notice title=Artifact Details::Name: ${{ env.ARTIFACT_NAME }}"
+        echo "::notice title=Archive::📦 ${{ env.RELEASE_ARCHIVE }}"
+        echo "::notice title=Architecture::🏗️ ${{ matrix.system }} (${{ matrix.crosscompiler }})"
+        echo "::notice title=Build Type::🔧 ${{ matrix.buildtype }}"
+        echo "::notice title=Compiler Flags::⚙️ ${{ matrix.cmake_flags }}"
+        
+        # Re-enable command echoing for other commands
+        set -x
         
         echo "::group::📁 Artifacts created"
         ls -la artifacts/
@@ -221,12 +232,6 @@ jobs:
         echo "::group::📦 Release archive created"
         ls -la *.tar.gz
         echo "::endgroup::"
-        
-        echo "::notice title=Artifact Details::Name: ${{ env.ARTIFACT_NAME }}"
-        echo "::notice title=Archive::📦 ${{ env.RELEASE_ARCHIVE }}"
-        echo "::notice title=Architecture::🏗️ ${{ matrix.system }} (${{ matrix.crosscompiler }})"
-        echo "::notice title=Build Type::🔧 ${{ matrix.buildtype }}"
-        echo "::notice title=Compiler Flags::⚙️ ${{ matrix.cmake_flags }}"
         
         echo "::group::🚀 Usage Instructions for Raspberry Pi Zero"
         cat << 'EOF'
