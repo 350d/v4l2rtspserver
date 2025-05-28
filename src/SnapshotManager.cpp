@@ -32,7 +32,6 @@ SnapshotManager::SnapshotManager()
 }
 
 SnapshotManager::~SnapshotManager() {
-    m_mjpegDevice.reset();
 }
 
 void SnapshotManager::setFrameDimensions(int width, int height) {
@@ -75,239 +74,6 @@ bool SnapshotManager::initialize(int width, int height) {
     return true;
 }
 
-bool SnapshotManager::initializeWithDevice(const std::string& primaryDevice) {
-    if (!m_enabled) {
-        m_mode = SnapshotMode::DISABLED;
-        return true;
-    }
-    
-    LOG(INFO) << "Initializing snapshot manager for device: " << primaryDevice;
-    
-    // Store primary device path for later use
-    m_primaryDevicePath = primaryDevice;
-    
-    // First check what formats the primary device supports
-    bool supportsH264 = false;
-    bool supportsMJPEG = false;
-    testDeviceFormats(primaryDevice, supportsH264, supportsMJPEG);
-    
-    if (supportsMJPEG) {
-        // Try to find a separate MJPEG device for snapshots
-        if (tryInitializeMJPEGDevice(primaryDevice)) {
-            m_mode = SnapshotMode::MJPEG_DEVICE;
-            LOG(NOTICE) << "Snapshot mode: Separate MJPEG device (" << m_mjpegDevicePath << ")";
-            return true;
-        }
-        
-        // If no separate device, we can use stream-based snapshots when MJPEG stream is active
-        m_mode = SnapshotMode::MJPEG_STREAM;
-        LOG(NOTICE) << "Snapshot mode: MJPEG stream-based (real snapshots only when camera is in MJPEG mode)";
-        return true;
-    }
-    
-    // Even for H264-only devices, try to find any MJPEG device for snapshots
-    LOG(INFO) << "Primary device doesn't support MJPEG, searching for any MJPEG device...";
-    if (tryInitializeMJPEGDevice(primaryDevice)) {
-        m_mode = SnapshotMode::MJPEG_DEVICE;
-        LOG(NOTICE) << "Snapshot mode: Separate MJPEG device (" << m_mjpegDevicePath << ")";
-        return true;
-    }
-    
-    // Fallback to info snapshots for H264-only devices
-    m_mode = SnapshotMode::H264_FALLBACK;
-    LOG(NOTICE) << "Snapshot mode: H264 fallback (info snapshots only)";
-    return true;
-}
-
-bool SnapshotManager::tryInitializeMJPEGDevice(const std::string& primaryDevice) {
-    std::string mjpegDevice;
-    
-    // Try to find a related MJPEG device
-    if (!findRelatedMJPEGDevice(primaryDevice, mjpegDevice)) {
-        LOG(INFO) << "No related MJPEG device found for " << primaryDevice;
-        return false;
-    }
-    
-    LOG(INFO) << "Attempting to initialize MJPEG snapshot device: " << mjpegDevice;
-    
-    try {
-        // Create MJPEG capture device with lower resolution for snapshots
-        std::list<unsigned int> formatList;
-        formatList.push_back(V4L2_PIX_FMT_MJPEG);
-        
-        // Use configurable resolution for snapshots (default 640x480)
-        V4L2DeviceParameters params(mjpegDevice.c_str(), formatList, m_snapshotWidth, m_snapshotHeight, 1, IOTYPE_MMAP);
-        
-        auto device = std::unique_ptr<V4l2Capture>(V4l2Capture::create(params));
-        if (device && device->isReady()) {
-            m_mjpegDevice = std::move(device);
-            m_mjpegDevicePath = mjpegDevice;
-            LOG(NOTICE) << "Successfully initialized MJPEG snapshot device: " << mjpegDevice;
-            return true;
-        } else {
-            LOG(WARN) << "Failed to create or ready MJPEG device: " << mjpegDevice;
-        }
-    } catch (const std::exception& e) {
-        LOG(ERROR) << "Failed to initialize MJPEG device " << mjpegDevice << ": " << e.what();
-    }
-    
-    return false;
-}
-
-bool SnapshotManager::findRelatedMJPEGDevice(const std::string& baseDevice, std::string& mjpegDevice) {
-    // Extract base device number (e.g., "/dev/video0" -> 0)
-    size_t pos = baseDevice.find_last_not_of("0123456789");
-    if (pos == std::string::npos) {
-        LOG(WARN) << "Cannot extract device number from: " << baseDevice;
-        return false;
-    }
-    
-    std::string baseNum = baseDevice.substr(pos + 1);
-    int baseDeviceNum = std::stoi(baseNum);
-    
-    LOG(INFO) << "Searching for MJPEG devices related to " << baseDevice << " (base number: " << baseDeviceNum << ")";
-    
-    // First check consecutive device numbers (traditional approach)
-    for (int offset = 1; offset <= 3; offset++) {
-        std::string candidatePath = "/dev/video" + std::to_string(baseDeviceNum + offset);
-        
-        LOG(DEBUG) << "Checking candidate device: " << candidatePath;
-        
-        if (access(candidatePath.c_str(), F_OK) == 0) {
-            LOG(INFO) << "Device exists: " << candidatePath;
-            if (testDeviceForMJPEG(candidatePath)) {
-                LOG(NOTICE) << "Found related MJPEG device: " << candidatePath;
-                mjpegDevice = candidatePath;
-                return true;
-            }
-        } else {
-            LOG(DEBUG) << "Device does not exist: " << candidatePath;
-        }
-    }
-    
-    // If no consecutive devices found, scan all available video devices
-    LOG(INFO) << "No consecutive MJPEG devices found, scanning all video devices...";
-    std::vector<std::string> allDevices = findVideoDevices();
-    
-    for (const std::string& candidatePath : allDevices) {
-        // Skip the base device itself
-        if (candidatePath == baseDevice) {
-            continue;
-        }
-        
-        LOG(DEBUG) << "Checking video device: " << candidatePath;
-        
-        if (testDeviceForMJPEG(candidatePath)) {
-            LOG(NOTICE) << "Found MJPEG device: " << candidatePath;
-            mjpegDevice = candidatePath;
-            return true;
-        }
-    }
-    
-    LOG(INFO) << "No MJPEG device found among " << allDevices.size() << " video devices";
-    return false;
-}
-
-bool SnapshotManager::testDeviceFormats(const std::string& devicePath, bool& supportsH264, bool& supportsMJPEG) {
-    supportsH264 = false;
-    supportsMJPEG = false;
-    
-#ifdef __linux__
-    int fd = open(devicePath.c_str(), O_RDWR | O_NONBLOCK);
-    if (fd < 0) {
-        return false;
-    }
-    
-    struct v4l2_fmtdesc fmtdesc;
-    memset(&fmtdesc, 0, sizeof(fmtdesc));
-    fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    
-    for (fmtdesc.index = 0; ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc) == 0; fmtdesc.index++) {
-        if (fmtdesc.pixelformat == V4L2_PIX_FMT_H264) {
-            supportsH264 = true;
-        }
-        if (fmtdesc.pixelformat == V4L2_PIX_FMT_MJPEG) {
-            supportsMJPEG = true;
-        }
-    }
-    
-    close(fd);
-    return true;
-#else
-    // On non-Linux platforms, assume basic support
-    return false;
-#endif
-}
-
-bool SnapshotManager::testDeviceForMJPEG(const std::string& devicePath) {
-    LOG(DEBUG) << "Testing device for MJPEG support: " << devicePath;
-    
-    int fd = open(devicePath.c_str(), O_RDWR);
-    if (fd < 0) {
-        LOG(DEBUG) << "Cannot open device: " << devicePath;
-        return false;
-    }
-    
-    struct v4l2_capability cap;
-    if (ioctl(fd, VIDIOC_QUERYCAP, &cap) < 0) {
-        LOG(DEBUG) << "Cannot query capabilities: " << devicePath;
-        close(fd);
-        return false;
-    }
-    
-    LOG(DEBUG) << "Device " << devicePath << " capabilities: 0x" << std::hex << cap.capabilities;
-    LOG(DEBUG) << "Device " << devicePath << " card: " << cap.card;
-    
-    // Check for Video Capture OR Memory-to-Memory capabilities
-    bool hasCapture = (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) || 
-                      (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE_MPLANE);
-    bool hasM2M = (cap.capabilities & V4L2_CAP_VIDEO_M2M) || 
-                  (cap.capabilities & V4L2_CAP_VIDEO_M2M_MPLANE);
-    
-    if (!hasCapture && !hasM2M) {
-        LOG(DEBUG) << "Device " << devicePath << " doesn't support capture or M2M";
-        close(fd);
-        return false;
-    }
-    
-    // For M2M devices, check capture formats (output of the encoder)
-    struct v4l2_fmtdesc fmt;
-    memset(&fmt, 0, sizeof(fmt));
-    fmt.type = hasM2M ? V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE : V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    
-    bool foundJPEG = false;
-    bool foundMJPEG = false;
-    
-    while (ioctl(fd, VIDIOC_ENUM_FMT, &fmt) == 0) {
-        LOG(DEBUG) << "Device " << devicePath << " supports format: " << 
-                      std::string((char*)&fmt.pixelformat, 4);
-        
-        if (fmt.pixelformat == V4L2_PIX_FMT_JPEG) {
-            foundJPEG = true;
-        }
-        if (fmt.pixelformat == V4L2_PIX_FMT_MJPEG) {
-            foundMJPEG = true;
-        }
-        fmt.index++;
-    }
-    
-    if (foundJPEG || foundMJPEG) {
-        std::string formatType = foundJPEG ? "JPEG" : "MJPEG";
-        if (hasM2M) {
-            LOG(INFO) << "Found " << formatType << " M2M encoder device: " << devicePath << 
-                         " (card: " << cap.card << ") - requires special handling";
-        } else {
-            LOG(INFO) << "Found " << formatType << " capture device: " << devicePath << 
-                         " (card: " << cap.card << ")";
-        }
-        close(fd);
-        return !hasM2M; // Only return true for regular capture devices, not M2M
-    }
-    
-    close(fd);
-    return false;
-}
-
 void SnapshotManager::processMJPEGFrame(const unsigned char* jpegData, size_t dataSize) {
     if (!m_enabled || !jpegData || dataSize == 0) {
         return;
@@ -337,15 +103,8 @@ void SnapshotManager::processH264Keyframe(const unsigned char* h264Data, size_t 
         return;
     }
     
-    // If we have a separate MJPEG device, try to capture from it
-    if (m_mode == SnapshotMode::MJPEG_DEVICE && m_mjpegDevice) {
-        if (captureMJPEGSnapshot()) {
-            return; // Successfully captured real MJPEG snapshot
-        }
-    }
-    
-    // Fallback to info snapshot
-    createRawInfoSnapshot(dataSize, width, height);
+    // Create H264 snapshot with cached frame support
+    createH264Snapshot(h264Data, dataSize, width, height);
 }
 
 void SnapshotManager::processH264KeyframeWithSPS(const unsigned char* h264Data, size_t dataSize, 
@@ -355,20 +114,8 @@ void SnapshotManager::processH264KeyframeWithSPS(const unsigned char* h264Data, 
         return;
     }
     
-    // If we have a separate MJPEG device, try to capture from it first
-    if (m_mode == SnapshotMode::MJPEG_DEVICE && m_mjpegDevice) {
-        if (captureMJPEGSnapshot()) {
-            return; // Successfully captured real MJPEG snapshot
-        }
-    }
-    
-    // Only create MP4 snapshots if explicitly in H264_MP4 mode
-    if (m_mode == SnapshotMode::H264_MP4 && !sps.empty() && !pps.empty()) {
-        createH264Snapshot(h264Data, dataSize, width, height, sps, pps);
-    } else {
-        // Fallback to SVG info snapshot
-        createH264Snapshot(h264Data, dataSize, width, height);
-    }
+    // Create H264 snapshot with SPS/PPS data
+    createH264Snapshot(h264Data, dataSize, width, height, sps, pps);
 }
 
 void SnapshotManager::processRawFrame(const unsigned char* yuvData, size_t dataSize, int width, int height) {
@@ -376,56 +123,10 @@ void SnapshotManager::processRawFrame(const unsigned char* yuvData, size_t dataS
         return;
     }
     
-    // Try to capture from MJPEG device if available first
-    if (m_mode == SnapshotMode::MJPEG_DEVICE && m_mjpegDevice) {
-        if (captureMJPEGSnapshot()) {
-            return; // Successfully captured real MJPEG snapshot
-        }
-    }
-    
     // Try YUV->JPEG conversion for real snapshots
     if (width > 0 && height > 0) {
-        if (convertYUVToJPEG(yuvData, dataSize, width, height)) {
-            return; // Successfully converted YUV to JPEG
-        }
+        convertYUVToJPEG(yuvData, dataSize, width, height);
     }
-    
-    // Fallback to info snapshot
-    createRawInfoSnapshot(dataSize, width, height);
-}
-
-bool SnapshotManager::captureMJPEGSnapshot() {
-    if (!m_mjpegDevice) {
-        return false;
-    }
-    
-    try {
-        // Start device if not already started
-        if (!m_mjpegDevice->start()) {
-            LOG(ERROR) << "Failed to start MJPEG snapshot device";
-            return false;
-        }
-        
-        // Capture a frame (this is blocking, but should be fast for snapshots)
-        std::vector<char> buffer(m_mjpegDevice->getBufferSize());
-        size_t bytesRead = m_mjpegDevice->read(buffer.data(), buffer.size());
-        
-        if (bytesRead > 0) {
-            std::lock_guard<std::mutex> lock(m_snapshotMutex);
-            m_currentSnapshot.assign(
-                reinterpret_cast<unsigned char*>(buffer.data()),
-                reinterpret_cast<unsigned char*>(buffer.data()) + bytesRead
-            );
-            m_lastSnapshotTime = std::time(nullptr);
-            
-            LOG(DEBUG) << "Captured MJPEG snapshot from separate device: " << bytesRead << " bytes";
-            return true;
-        }
-    } catch (const std::exception& e) {
-        LOG(ERROR) << "Error capturing MJPEG snapshot: " << e.what();
-    }
-    
-    return false;
 }
 
 void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h264Size, int width, int height, const std::string& sps, const std::string& pps) {
@@ -687,12 +388,13 @@ std::string SnapshotManager::getSnapshotMimeType() const {
     // Fallback to mode-based detection
     switch (m_mode) {
         case SnapshotMode::MJPEG_STREAM:
-        case SnapshotMode::MJPEG_DEVICE:
-        case SnapshotMode::YUV_CONVERTED:
-            return "image/jpeg";
+            return "MJPEG Stream (real images when MJPEG active)";
         case SnapshotMode::H264_MP4:
+            return "H264 MP4 (mini video snapshots with keyframes)";
         case SnapshotMode::H264_FALLBACK:
-            return "video/mp4";
+            return "H264 Fallback (simplified MP4 snapshots)";
+        case SnapshotMode::YUV_CONVERTED:
+            return "YUV Converted (real JPEG images from YUV data)";
         default:
             return "text/plain";
     }
@@ -704,8 +406,6 @@ std::string SnapshotManager::getModeDescription() const {
             return "Disabled";
         case SnapshotMode::MJPEG_STREAM:
             return "MJPEG Stream (real images when MJPEG active)";
-        case SnapshotMode::MJPEG_DEVICE:
-            return "Separate MJPEG Device (always real images)";
         case SnapshotMode::H264_MP4:
             return "H264 MP4 (mini video snapshots with keyframes)";
         case SnapshotMode::H264_FALLBACK:
@@ -726,26 +426,6 @@ bool SnapshotManager::hasRecentSnapshot() const {
     // Consider snapshot recent if it's less than 30 seconds old
     std::time_t now = std::time(nullptr);
     return (now - m_lastSnapshotTime) < 30;
-}
-
-std::vector<std::string> SnapshotManager::findVideoDevices() {
-    std::vector<std::string> devices;
-    
-    // Scan a wider range of video devices (0-31)
-    // Pi cameras often create devices with high numbers like video10, video20, etc.
-    for (int i = 0; i <= 31; i++) {
-        std::string devicePath = "/dev/video" + std::to_string(i);
-        if (access(devicePath.c_str(), F_OK) == 0) {
-            devices.push_back(devicePath);
-        }
-    }
-    
-    LOG(INFO) << "Found " << devices.size() << " video devices";
-    for (const std::string& device : devices) {
-        LOG(DEBUG) << "Available device: " << device;
-    }
-    
-    return devices;
 }
 
 void SnapshotManager::autoSaveSnapshot() {
@@ -1023,43 +703,4 @@ bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t data
         LOG(ERROR) << "YUV->JPEG conversion failed: " << e.what();
         return false;
     }
-}
-
-void SnapshotManager::createRawInfoSnapshot(size_t rawSize, int width, int height) {
-    // Create informational SVG for raw YUV streams
-    int actualWidth = width > 0 ? width : m_width;
-    int actualHeight = height > 0 ? height : m_height;
-    
-    std::time_t now = std::time(nullptr);
-    char timeStr[100];
-    std::strftime(timeStr, sizeof(timeStr), "%H:%M:%S", std::localtime(&now));
-    
-    std::string svgContent = 
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<svg width=\"400\" height=\"300\" xmlns=\"http://www.w3.org/2000/svg\">\n"
-        "  <rect width=\"100%\" height=\"100%\" fill=\"#f0f8ff\"/>\n"
-        "  <rect x=\"10\" y=\"10\" width=\"380\" height=\"280\" fill=\"#ffffff\" stroke=\"#4682b4\" stroke-width=\"2\" rx=\"8\"/>\n"
-        "  <text x=\"200\" y=\"50\" text-anchor=\"middle\" font-family=\"Arial\" font-size=\"20\" font-weight=\"bold\" fill=\"#2c3e50\">YUV Stream Active</text>\n"
-        "  <text x=\"200\" y=\"100\" text-anchor=\"middle\" font-family=\"Arial\" font-size=\"14\" fill=\"#34495e\">Resolution: " + 
-        std::to_string(actualWidth) + "x" + std::to_string(actualHeight) + "</text>\n"
-        "  <text x=\"200\" y=\"130\" text-anchor=\"middle\" font-family=\"Arial\" font-size=\"14\" fill=\"#34495e\">Frame: " + 
-        std::to_string(rawSize) + " bytes</text>\n"
-        "  <text x=\"200\" y=\"160\" text-anchor=\"middle\" font-family=\"Arial\" font-size=\"14\" fill=\"#34495e\">Time: " + 
-        std::string(timeStr) + "</text>\n"
-        "  <rect x=\"50\" y=\"180\" width=\"300\" height=\"80\" fill=\"#ecf0f1\" stroke=\"#bdc3c7\" stroke-width=\"1\" rx=\"4\"/>\n"
-        "  <text x=\"200\" y=\"200\" text-anchor=\"middle\" font-family=\"Arial\" font-size=\"12\" fill=\"#2c3e50\">YUV data detected</text>\n"
-        "  <text x=\"200\" y=\"220\" text-anchor=\"middle\" font-family=\"Arial\" font-size=\"11\" fill=\"#7f8c8d\">Converting to viewable format...</text>\n"
-        "  <text x=\"200\" y=\"240\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"9\" fill=\"#95a5a6\">Format: YUYV/YUV422</text>\n"
-        "  <text x=\"200\" y=\"255\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"9\" fill=\"#95a5a6\">Real-time YUV->RGB conversion active</text>\n"
-        "</svg>";
-    
-    std::lock_guard<std::mutex> lock(m_snapshotMutex);
-    m_currentSnapshot.assign(svgContent.begin(), svgContent.end());
-    m_lastSnapshotTime = std::time(nullptr);
-    
-    LOG(DEBUG) << "YUV info snapshot (SVG) created: " << m_currentSnapshot.size() << " bytes for " 
-               << rawSize << " bytes of YUV data (" << width << "x" << height << ")";
-    
-    // Auto-save if file path is specified
-    autoSaveSnapshot();
 } 

@@ -23,7 +23,9 @@
 #include <sstream>
 
 // libv4l2
+#ifdef __linux__
 #include <linux/videodev2.h>
+#endif
 
 // project
 #include "logger.h"
@@ -274,11 +276,13 @@ int main(int argc, char** argv)
 	
 	// default format tries
 	if ((videoformatList.empty()) && (format!=0)) {
+#ifdef __linux__
 		videoformatList.push_back(V4L2_PIX_FMT_HEVC);
 		videoformatList.push_back(V4L2_PIX_FMT_H264);
 		videoformatList.push_back(V4L2_PIX_FMT_MJPEG);
 		videoformatList.push_back(V4L2_PIX_FMT_JPEG);
 		videoformatList.push_back(V4L2_PIX_FMT_NV12);
+#endif
 	}
 
 #ifdef HAVE_ALSA	

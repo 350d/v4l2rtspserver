@@ -18,14 +18,12 @@
 #include <ctime>
 
 // Forward declaration
-class V4l2Capture;
 struct V4L2DeviceParameters;
 
 enum class SnapshotMode {
     DISABLED,
     MJPEG_STREAM,     // Real JPEG snapshots from MJPEG stream
-    MJPEG_DEVICE,     // Real JPEG snapshots from separate MJPEG device
-    H264_FALLBACK,    // Informational SVG snapshots for H264 streams
+    H264_FALLBACK,    // MP4 snapshots with cached H264 frames
     H264_MP4,         // Mini MP4 snapshots with H264 keyframes
     YUV_CONVERTED     // Real images converted from YUV data
 };
@@ -47,7 +45,6 @@ public:
     
     // Initialization
     bool initialize(int width, int height);
-    bool initializeWithDevice(const std::string& primaryDevice);
     
     // Frame processing (called by existing video sources)
     void processMJPEGFrame(const unsigned char* jpegData, size_t dataSize);
@@ -70,27 +67,16 @@ public:
     std::string getModeDescription() const;
     bool hasRecentSnapshot() const;
     
-    // Device discovery methods
-    std::vector<std::string> findVideoDevices();
-    bool findRelatedMJPEGDevice(const std::string& baseDevice, std::string& mjpegDevice);
-    bool testDeviceForMJPEG(const std::string& devicePath);
-    bool tryInitializeMJPEGDevice(const std::string& primaryDevice);
-    
 private:
     SnapshotManager();
     ~SnapshotManager();
     SnapshotManager(const SnapshotManager&) = delete;
     SnapshotManager& operator=(const SnapshotManager&) = delete;
     
-    // Device management
-    bool testDeviceFormats(const std::string& devicePath, bool& supportsH264, bool& supportsMJPEG);
-    
     // Snapshot creation
     void createH264Snapshot(const unsigned char* h264Data, size_t h264Size, 
                            int width, int height,
                            const std::string& sps = "", const std::string& pps = "");
-    bool captureMJPEGSnapshot();
-    void createRawInfoSnapshot(size_t rawSize, int width, int height);
     void autoSaveSnapshot();
     bool convertYUVToJPEG(const unsigned char* yuvData, size_t dataSize, int width, int height);
     
@@ -106,11 +92,6 @@ private:
     mutable std::mutex m_snapshotMutex;
     std::vector<unsigned char> m_currentSnapshot;
     std::time_t m_lastSnapshotTime;
-    
-    // MJPEG device for separate capture
-    std::unique_ptr<V4l2Capture> m_mjpegDevice;
-    std::string m_mjpegDevicePath;
-    std::string m_primaryDevicePath;
     
     // File operations
     std::string m_filePath;
