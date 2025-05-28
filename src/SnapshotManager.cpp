@@ -168,13 +168,13 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     if (spsToUse.empty() && !m_lastSPS.empty()) spsToUse = m_lastSPS;
     if (ppsToUse.empty() && !m_lastPPS.empty()) ppsToUse = m_lastPPS;
     
-    // Create MP4 container with real H264 frame
+    // Create proper MP4 container
+    std::vector<unsigned char> mp4Data;
+    
     int actualWidth = widthToUse > 0 ? widthToUse : (m_width > 0 ? m_width : 640);
     int actualHeight = heightToUse > 0 ? heightToUse : (m_height > 0 ? m_height : 480);
     
-    std::vector<unsigned char> mp4Data;
-    
-    // Helper lambda to write 32-bit big-endian value
+    // Helper function to write 32-bit big-endian integer
     auto writeBE32 = [&mp4Data](uint32_t value) {
         mp4Data.push_back((value >> 24) & 0xFF);
         mp4Data.push_back((value >> 16) & 0xFF);
@@ -182,136 +182,210 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         mp4Data.push_back(value & 0xFF);
     };
     
-    // Helper lambda to write 16-bit big-endian value
+    // Helper function to write 16-bit big-endian integer
     auto writeBE16 = [&mp4Data](uint16_t value) {
         mp4Data.push_back((value >> 8) & 0xFF);
         mp4Data.push_back(value & 0xFF);
     };
     
-    // Helper lambda to write string
-    auto writeString = [&mp4Data](const std::string& str) {
-        mp4Data.insert(mp4Data.end(), str.begin(), str.end());
+    // Helper function to write box header
+    auto writeBoxHeader = [&mp4Data, &writeBE32](uint32_t size, const char* type) {
+        writeBE32(size);
+        mp4Data.insert(mp4Data.end(), type, type + 4);
     };
     
-    // 1. FTYP box (File Type)
-    size_t ftypStart = mp4Data.size();
-    writeBE32(0); // size placeholder
-    writeString("ftyp");
-    writeString("mp42");           // major brand
-    writeBE32(0);                  // minor version  
-    writeString("mp42isom");       // compatible brands
+    // Calculate sizes for proper MP4 structure
+    size_t avcCSize = 11 + (spsToUse.empty() ? 0 : spsToUse.size() + 3) + (ppsToUse.empty() ? 0 : ppsToUse.size() + 3);
+    size_t stsdSize = 16 + 86 + avcCSize; // stsd box size
+    size_t stblSize = 8 + stsdSize + 28 + 20 + 28 + 20; // stbl box size
+    size_t minfSize = 8 + 20 + 36 + 8 + stblSize; // minf box size
+    size_t mdiaSize = 8 + 32 + 22 + 8 + minfSize; // mdia box size
+    size_t trakSize = 8 + 92 + 8 + mdiaSize; // trak box size
+    size_t moovSize = 8 + 108 + 8 + trakSize; // moov box size
+    size_t mdatSize = 8 + 4 + sizeToUse; // mdat box size
     
-    // Update ftyp size
-    uint32_t ftypSize = mp4Data.size() - ftypStart;
-    mp4Data[ftypStart] = (ftypSize >> 24) & 0xFF;
-    mp4Data[ftypStart + 1] = (ftypSize >> 16) & 0xFF;
-    mp4Data[ftypStart + 2] = (ftypSize >> 8) & 0xFF;
-    mp4Data[ftypStart + 3] = ftypSize & 0xFF;
+    // 1. ftyp box (File Type Box)
+    writeBoxHeader(32, "ftyp");
+    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', 'm'}); // major_brand
+    writeBE32(0x00000200); // minor_version
+    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', 'm'}); // compatible_brands[0]
+    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', '2'}); // compatible_brands[1]
+    mp4Data.insert(mp4Data.end(), {'a', 'v', 'c', '1'}); // compatible_brands[2]
+    mp4Data.insert(mp4Data.end(), {'m', 'p', '4', '1'}); // compatible_brands[3]
     
-    // 2. MOOV box (Movie metadata)
-    size_t moovStart = mp4Data.size();
-    writeBE32(0); // size placeholder
-    writeString("moov");
+    // 2. mdat box (Media Data Box) - put before moov for streaming
+    writeBoxHeader(mdatSize, "mdat");
+    writeBE32(sizeToUse); // NAL unit length
+    mp4Data.insert(mp4Data.end(), dataToUse, dataToUse + sizeToUse);
     
-    // 2.1 MVHD box (Movie header)
-    size_t mvhdStart = mp4Data.size();
-    writeBE32(0); // size placeholder
-    writeString("mvhd");
-    writeBE32(0);                  // version & flags
-    writeBE32(0);                  // creation time
-    writeBE32(0);                  // modification time  
-    writeBE32(1000);               // timescale (1000 units per second)
-    writeBE32(100);                // duration (0.1 second)
-    writeBE32(0x00010000);         // preferred rate (1.0)
-    writeBE16(0x0100);             // preferred volume (1.0)
-    // Reserved
-    for (int i = 0; i < 10; i++) mp4Data.push_back(0);
-    // Matrix structure (identity matrix)
+    // 3. moov box (Movie Box)
+    writeBoxHeader(moovSize, "moov");
+    
+    // 3.1 mvhd box (Movie Header Box)
+    writeBoxHeader(108, "mvhd");
+    mp4Data.push_back(1); // version
+    mp4Data.insert(mp4Data.end(), 3, 0); // flags
+    writeBE32(0); writeBE32(0); // creation_time (64-bit)
+    writeBE32(0); writeBE32(0); // modification_time (64-bit)
+    writeBE32(1000); // timescale
+    writeBE32(0); writeBE32(1000); // duration (64-bit) - 1 second
+    writeBE32(0x00010000); // rate (1.0)
+    writeBE16(0x0100); // volume (1.0)
+    writeBE16(0); // reserved
+    writeBE32(0); writeBE32(0); // reserved
+    // transformation matrix (identity)
     writeBE32(0x00010000); writeBE32(0); writeBE32(0);
     writeBE32(0); writeBE32(0x00010000); writeBE32(0);
     writeBE32(0); writeBE32(0); writeBE32(0x40000000);
-    // Preview time/duration, poster time, selection time/duration, current time
-    for (int i = 0; i < 6; i++) writeBE32(0);
-    writeBE32(2);                  // next track ID
+    mp4Data.insert(mp4Data.end(), 24, 0); // pre_defined
+    writeBE32(2); // next_track_ID
     
-    // Update mvhd size
-    uint32_t mvhdSize = mp4Data.size() - mvhdStart;
-    mp4Data[mvhdStart] = (mvhdSize >> 24) & 0xFF;
-    mp4Data[mvhdStart + 1] = (mvhdSize >> 16) & 0xFF;
-    mp4Data[mvhdStart + 2] = (mvhdSize >> 8) & 0xFF;
-    mp4Data[mvhdStart + 3] = mvhdSize & 0xFF;
+    // 3.2 trak box (Track Box)
+    writeBoxHeader(trakSize, "trak");
     
-    // 2.2 TRAK box (Track container)
-    size_t trakStart = mp4Data.size();
-    writeBE32(0); // size placeholder
-    writeString("trak");
-    
-    // 2.2.1 TKHD box (Track header)
-    size_t tkhdStart = mp4Data.size();
-    writeBE32(0); // size placeholder
-    writeString("tkhd");
-    writeBE32(0x000000007);        // version & flags (track enabled)
-    writeBE32(0);                  // creation time
-    writeBE32(0);                  // modification time
-    writeBE32(1);                  // track ID
-    writeBE32(0);                  // reserved
-    writeBE32(100);                // duration
-    writeBE32(0); writeBE32(0);    // reserved
-    writeBE16(0);                  // layer
-    writeBE16(0);                  // alternate group
-    writeBE16(0);                  // volume
-    writeBE16(0);                  // reserved
-    // Matrix structure (identity matrix)
+    // 3.2.1 tkhd box (Track Header Box)
+    writeBoxHeader(92, "tkhd");
+    mp4Data.push_back(1); // version
+    mp4Data.insert(mp4Data.end(), 3, 0x07); // flags (track enabled, in movie, in preview)
+    writeBE32(0); writeBE32(0); // creation_time (64-bit)
+    writeBE32(0); writeBE32(0); // modification_time (64-bit)
+    writeBE32(1); // track_ID
+    writeBE32(0); // reserved
+    writeBE32(0); writeBE32(1000); // duration (64-bit)
+    writeBE32(0); writeBE32(0); // reserved
+    writeBE16(0); // layer
+    writeBE16(0); // alternate_group
+    writeBE16(0); // volume
+    writeBE16(0); // reserved
+    // transformation matrix (identity)
     writeBE32(0x00010000); writeBE32(0); writeBE32(0);
     writeBE32(0); writeBE32(0x00010000); writeBE32(0);
     writeBE32(0); writeBE32(0); writeBE32(0x40000000);
-    writeBE32(actualWidth << 16);  // track width
-    writeBE32(actualHeight << 16); // track height
+    writeBE32(actualWidth << 16); // width
+    writeBE32(actualHeight << 16); // height
     
-    // Update tkhd size
-    uint32_t tkhdSize = mp4Data.size() - tkhdStart;
-    mp4Data[tkhdStart] = (tkhdSize >> 24) & 0xFF;
-    mp4Data[tkhdStart + 1] = (tkhdSize >> 16) & 0xFF;
-    mp4Data[tkhdStart + 2] = (tkhdSize >> 8) & 0xFF;
-    mp4Data[tkhdStart + 3] = tkhdSize & 0xFF;
+    // 3.2.2 mdia box (Media Box)
+    writeBoxHeader(mdiaSize, "mdia");
     
-    // Update trak size
-    uint32_t trakSize = mp4Data.size() - trakStart;
-    mp4Data[trakStart] = (trakSize >> 24) & 0xFF;
-    mp4Data[trakStart + 1] = (trakSize >> 16) & 0xFF;
-    mp4Data[trakStart + 2] = (trakSize >> 8) & 0xFF;
-    mp4Data[trakStart + 3] = trakSize & 0xFF;
+    // 3.2.2.1 mdhd box (Media Header Box)
+    writeBoxHeader(32, "mdhd");
+    mp4Data.push_back(0); // version
+    mp4Data.insert(mp4Data.end(), 3, 0); // flags
+    writeBE32(0); // creation_time
+    writeBE32(0); // modification_time
+    writeBE32(1000); // timescale
+    writeBE32(1000); // duration
+    writeBE16(0x55c4); // language (und)
+    writeBE16(0); // pre_defined
     
-    // Update moov size
-    uint32_t moovSize = mp4Data.size() - moovStart;
-    mp4Data[moovStart] = (moovSize >> 24) & 0xFF;
-    mp4Data[moovStart + 1] = (moovSize >> 16) & 0xFF;
-    mp4Data[moovStart + 2] = (moovSize >> 8) & 0xFF;
-    mp4Data[moovStart + 3] = moovSize & 0xFF;
+    // 3.2.2.2 hdlr box (Handler Reference Box)
+    writeBoxHeader(22, "hdlr");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(0); // pre_defined
+    mp4Data.insert(mp4Data.end(), {'v', 'i', 'd', 'e'}); // handler_type
+    mp4Data.insert(mp4Data.end(), 12, 0); // reserved
+    mp4Data.push_back(0); // name (empty string)
     
-    // 3. MDAT box (Media data) with real H264 frame
-    size_t dataSize = 4 + sizeToUse; // Start code + H264 data
+    // 3.2.2.3 minf box (Media Information Box)
+    writeBoxHeader(minfSize, "minf");
     
-    // Add SPS/PPS if available
-    if (!spsToUse.empty()) dataSize += 4 + spsToUse.size();
-    if (!ppsToUse.empty()) dataSize += 4 + ppsToUse.size();
+    // 3.2.2.3.1 vmhd box (Video Media Header Box)
+    writeBoxHeader(20, "vmhd");
+    mp4Data.push_back(0); // version
+    mp4Data.push_back(0); mp4Data.push_back(0); mp4Data.push_back(1); // flags
+    writeBE16(0); // graphicsmode
+    writeBE16(0); writeBE16(0); writeBE16(0); // opcolor
     
-    writeBE32(8 + dataSize);       // mdat box size
-    writeString("mdat");
+    // 3.2.2.3.2 dinf box (Data Information Box)
+    writeBoxHeader(36, "dinf");
+    writeBoxHeader(28, "dref");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(1); // entry_count
+    writeBoxHeader(12, "url ");
+    mp4Data.push_back(0); // version
+    mp4Data.push_back(0); mp4Data.push_back(0); mp4Data.push_back(1); // flags (self-contained)
     
-    // Add NAL units with Annex B start codes
+    // 3.2.2.3.3 stbl box (Sample Table Box)
+    writeBoxHeader(stblSize, "stbl");
+    
+    // 3.2.2.3.3.1 stsd box (Sample Description Box)
+    writeBoxHeader(stsdSize, "stsd");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(1); // entry_count
+    
+    // avc1 sample entry
+    writeBoxHeader(78 + avcCSize, "avc1");
+    mp4Data.insert(mp4Data.end(), 6, 0); // reserved
+    writeBE16(1); // data_reference_index
+    writeBE16(0); // pre_defined
+    writeBE16(0); // reserved
+    mp4Data.insert(mp4Data.end(), 12, 0); // pre_defined
+    writeBE16(actualWidth); // width
+    writeBE16(actualHeight); // height
+    writeBE32(0x00480000); // horizresolution (72 dpi)
+    writeBE32(0x00480000); // vertresolution (72 dpi)
+    writeBE32(0); // reserved
+    writeBE16(1); // frame_count
+    mp4Data.insert(mp4Data.end(), 32, 0); // compressorname
+    writeBE16(24); // depth
+    writeBE16(0xFFFF); // pre_defined
+    
+    // avcC box (AVC Configuration Box)
+    writeBoxHeader(avcCSize, "avcC");
+    mp4Data.push_back(1); // configurationVersion
+    mp4Data.push_back(spsToUse.empty() ? 0x42 : spsToUse[1]); // AVCProfileIndication
+    mp4Data.push_back(spsToUse.empty() ? 0xE0 : spsToUse[2]); // profile_compatibility
+    mp4Data.push_back(spsToUse.empty() ? 0x1E : spsToUse[3]); // AVCLevelIndication
+    mp4Data.push_back(0xFF); // lengthSizeMinusOne (4 bytes)
+    
+    // SPS
+    mp4Data.push_back(0xE1); // numOfSequenceParameterSets
     if (!spsToUse.empty()) {
-        writeBE32(0x00000001);         // start code
+        writeBE16(spsToUse.size());
         mp4Data.insert(mp4Data.end(), spsToUse.begin(), spsToUse.end());
+    } else {
+        writeBE16(0);
     }
     
+    // PPS
+    mp4Data.push_back(ppsToUse.empty() ? 0 : 1); // numOfPictureParameterSets
     if (!ppsToUse.empty()) {
-        writeBE32(0x00000001);         // start code
+        writeBE16(ppsToUse.size());
         mp4Data.insert(mp4Data.end(), ppsToUse.begin(), ppsToUse.end());
     }
     
-    writeBE32(0x00000001);         // start code
-    mp4Data.insert(mp4Data.end(), dataToUse, dataToUse + sizeToUse);
+    // 3.2.2.3.3.2 stts box (Decoding Time to Sample Box)
+    writeBoxHeader(16, "stts");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(1); // entry_count
+    writeBE32(1); // sample_count
+    writeBE32(1000); // sample_delta
+    
+    // 3.2.2.3.3.3 stss box (Sync Sample Box)
+    writeBoxHeader(16, "stss");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(1); // entry_count
+    writeBE32(1); // sample_number
+    
+    // 3.2.2.3.3.4 stsc box (Sample to Chunk Box)
+    writeBoxHeader(16, "stsc");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(1); // entry_count
+    writeBE32(1); // first_chunk
+    writeBE32(1); // samples_per_chunk
+    writeBE32(1); // sample_description_index
+    
+    // 3.2.2.3.3.5 stsz box (Sample Size Box)
+    writeBoxHeader(20, "stsz");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(sizeToUse + 4); // sample_size (including length prefix)
+    writeBE32(1); // sample_count
+    
+    // 3.2.2.3.3.6 stco box (Chunk Offset Box)
+    writeBoxHeader(16, "stco");
+    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
+    writeBE32(1); // entry_count
+    writeBE32(40); // chunk_offset (after ftyp box)
     
     std::lock_guard<std::mutex> lock(m_snapshotMutex);
     m_currentSnapshot = mp4Data;
@@ -320,7 +394,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     std::string snapshotType = (!spsToUse.empty() && !ppsToUse.empty()) ? "full MP4" : 
                               (!spsToUse.empty() || !ppsToUse.empty()) ? "partial MP4" : "basic MP4";
     
-    LOG(DEBUG) << "H264 snapshot (" << snapshotType << ") created: " << mp4Data.size() << " bytes (" 
+    LOG(DEBUG) << "MP4 snapshot (" << snapshotType << ") created: " << mp4Data.size() << " bytes (" 
                << actualWidth << "x" << actualHeight << "), SPS:" << spsToUse.size() 
                << " PPS:" << ppsToUse.size() << " H264:" << sizeToUse;
     
@@ -376,25 +450,33 @@ std::string SnapshotManager::getSnapshotMimeType() const {
             }
         }
         
-        // Check for MP4 magic bytes (ftyp)
-        if (m_currentSnapshot.size() >= 8) {
-            std::string ftyp(m_currentSnapshot.begin() + 4, m_currentSnapshot.begin() + 8);
-            if (ftyp == "ftyp") {
-                return "video/mp4";
-            }
+        // Check for H264 Annex B format (starts with 0x00000001)
+        if (m_currentSnapshot.size() >= 4 && 
+            m_currentSnapshot[0] == 0x00 && 
+            m_currentSnapshot[1] == 0x00 && 
+            m_currentSnapshot[2] == 0x00 && 
+            m_currentSnapshot[3] == 0x01) {
+            return "video/h264";
+        }
+        
+        // Check for MP4 format (starts with ftyp box size + "ftyp")
+        if (m_currentSnapshot.size() >= 8 && 
+            m_currentSnapshot[4] == 'f' && 
+            m_currentSnapshot[5] == 't' && 
+            m_currentSnapshot[6] == 'y' && 
+            m_currentSnapshot[7] == 'p') {
+            return "video/mp4";
         }
     }
     
     // Fallback to mode-based detection
     switch (m_mode) {
         case SnapshotMode::MJPEG_STREAM:
-            return "MJPEG Stream (real images when MJPEG active)";
-        case SnapshotMode::H264_MP4:
-            return "H264 MP4 (mini video snapshots with keyframes)";
-        case SnapshotMode::H264_FALLBACK:
-            return "H264 Fallback (simplified MP4 snapshots)";
         case SnapshotMode::YUV_CONVERTED:
-            return "YUV Converted (real JPEG images from YUV data)";
+            return "image/jpeg";
+        case SnapshotMode::H264_MP4:
+        case SnapshotMode::H264_FALLBACK:
+            return "video/mp4";
         default:
             return "text/plain";
     }
@@ -407,9 +489,9 @@ std::string SnapshotManager::getModeDescription() const {
         case SnapshotMode::MJPEG_STREAM:
             return "MJPEG Stream (real images when MJPEG active)";
         case SnapshotMode::H264_MP4:
-            return "H264 MP4 (mini video snapshots with keyframes)";
+            return "H264 MP4 (mini MP4 videos with keyframes)";
         case SnapshotMode::H264_FALLBACK:
-            return "H264 Fallback (simplified MP4 snapshots)";
+            return "H264 MP4 Fallback (cached MP4 snapshots)";
         case SnapshotMode::YUV_CONVERTED:
             return "YUV Converted (real JPEG images from YUV data)";
         default:
