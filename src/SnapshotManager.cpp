@@ -133,6 +133,131 @@ void SnapshotManager::processRawFrame(const unsigned char* yuvData, size_t dataS
 }
 
 void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h264Size, int width, int height, const std::string& sps, const std::string& pps) {
+    // DUMP REAL H.264 DATA FOR ANALYSIS
+    static bool dumpEnabled = true;
+    static int dumpCounter = 0;
+    
+    if (dumpEnabled && dumpCounter < 5) { // Dump first 5 snapshots only
+        dumpCounter++;
+        
+        // Dump SPS data
+        if (!sps.empty()) {
+            std::string spsFile = "tmp/dump_sps_" + std::to_string(dumpCounter) + ".bin";
+            std::ofstream spsOut(spsFile, std::ios::binary);
+            if (spsOut.is_open()) {
+                spsOut.write(sps.data(), sps.size());
+                spsOut.close();
+                LOG(NOTICE) << "DUMP: SPS data saved to " << spsFile << " (" << sps.size() << " bytes)";
+                
+                // Also create hex dump
+                std::string spsHexFile = "tmp/dump_sps_" + std::to_string(dumpCounter) + ".hex";
+                std::ofstream spsHex(spsHexFile);
+                if (spsHex.is_open()) {
+                    spsHex << "SPS " << dumpCounter << " (" << sps.size() << " bytes):\n";
+                    for (size_t i = 0; i < sps.size(); i++) {
+                        if (i % 16 == 0) spsHex << "\n";
+                        spsHex << std::hex << std::setfill('0') << std::setw(2) << (unsigned int)(unsigned char)sps[i] << " ";
+                    }
+                    spsHex << "\n";
+                    spsHex.close();
+                }
+            }
+        } else {
+            LOG(NOTICE) << "DUMP: No SPS data available for snapshot " << dumpCounter;
+        }
+        
+        // Dump PPS data
+        if (!pps.empty()) {
+            std::string ppsFile = "tmp/dump_pps_" + std::to_string(dumpCounter) + ".bin";
+            std::ofstream ppsOut(ppsFile, std::ios::binary);
+            if (ppsOut.is_open()) {
+                ppsOut.write(pps.data(), pps.size());
+                ppsOut.close();
+                LOG(NOTICE) << "DUMP: PPS data saved to " << ppsFile << " (" << pps.size() << " bytes)";
+                
+                // Also create hex dump
+                std::string ppsHexFile = "tmp/dump_pps_" + std::to_string(dumpCounter) + ".hex";
+                std::ofstream ppsHex(ppsHexFile);
+                if (ppsHex.is_open()) {
+                    ppsHex << "PPS " << dumpCounter << " (" << pps.size() << " bytes):\n";
+                    for (size_t i = 0; i < pps.size(); i++) {
+                        if (i % 16 == 0) ppsHex << "\n";
+                        ppsHex << std::hex << std::setfill('0') << std::setw(2) << (unsigned int)(unsigned char)pps[i] << " ";
+                    }
+                    ppsHex << "\n";
+                    ppsHex.close();
+                }
+            }
+        } else {
+            LOG(NOTICE) << "DUMP: No PPS data available for snapshot " << dumpCounter;
+        }
+        
+        // Dump H.264 frame data
+        if (h264Data && h264Size > 0) {
+            std::string frameFile = "tmp/dump_h264_frame_" + std::to_string(dumpCounter) + ".bin";
+            std::ofstream frameOut(frameFile, std::ios::binary);
+            if (frameOut.is_open()) {
+                frameOut.write(reinterpret_cast<const char*>(h264Data), h264Size);
+                frameOut.close();
+                LOG(NOTICE) << "DUMP: H.264 frame data saved to " << frameFile << " (" << h264Size << " bytes)";
+                
+                // Also create hex dump (first 64 bytes only)
+                std::string frameHexFile = "tmp/dump_h264_frame_" + std::to_string(dumpCounter) + ".hex";
+                std::ofstream frameHex(frameHexFile);
+                if (frameHex.is_open()) {
+                    frameHex << "H.264 Frame " << dumpCounter << " (" << h264Size << " bytes, showing first 64):\n";
+                    size_t dumpSize = std::min(h264Size, (size_t)64);
+                    for (size_t i = 0; i < dumpSize; i++) {
+                        if (i % 16 == 0) frameHex << "\n";
+                        frameHex << std::hex << std::setfill('0') << std::setw(2) << (unsigned int)h264Data[i] << " ";
+                    }
+                    frameHex << "\n";
+                    frameHex.close();
+                }
+            }
+        } else {
+            LOG(NOTICE) << "DUMP: No H.264 frame data available for snapshot " << dumpCounter;
+        }
+        
+        // Create summary file
+        std::string summaryFile = "tmp/dump_summary_" + std::to_string(dumpCounter) + ".txt";
+        std::ofstream summary(summaryFile);
+        if (summary.is_open()) {
+            summary << "H.264 Snapshot Dump #" << dumpCounter << "\n";
+            summary << "=====================================\n";
+            summary << "Timestamp: " << std::time(nullptr) << "\n";
+            summary << "Dimensions: " << width << "x" << height << "\n";
+            summary << "SPS size: " << (sps.empty() ? 0 : sps.size()) << " bytes\n";
+            summary << "PPS size: " << (pps.empty() ? 0 : pps.size()) << " bytes\n";
+            summary << "H.264 frame size: " << h264Size << " bytes\n";
+            summary << "SPS available: " << (sps.empty() ? "NO" : "YES") << "\n";
+            summary << "PPS available: " << (pps.empty() ? "NO" : "YES") << "\n";
+            summary << "Frame data available: " << (h264Data && h264Size > 0 ? "YES" : "NO") << "\n";
+            summary << "\nFiles created:\n";
+            if (!sps.empty()) {
+                summary << "- dump_sps_" << dumpCounter << ".bin (binary SPS)\n";
+                summary << "- dump_sps_" << dumpCounter << ".hex (hex dump)\n";
+            }
+            if (!pps.empty()) {
+                summary << "- dump_pps_" << dumpCounter << ".bin (binary PPS)\n";
+                summary << "- dump_pps_" << dumpCounter << ".hex (hex dump)\n";
+            }
+            if (h264Data && h264Size > 0) {
+                summary << "- dump_h264_frame_" << dumpCounter << ".bin (binary frame)\n";
+                summary << "- dump_h264_frame_" << dumpCounter << ".hex (hex dump)\n";
+            }
+            summary.close();
+        }
+        
+        LOG(NOTICE) << "DUMP: Summary saved to " << summaryFile;
+        
+        if (dumpCounter >= 5) {
+            LOG(NOTICE) << "DUMP: Completed dumping 5 snapshots. Dumps disabled.";
+            dumpEnabled = false;
+        }
+    }
+    // END DUMP SECTION
+    
     std::vector<unsigned char> mp4Data;
     mp4Data.reserve(h264Size + 2048); // Reserve space for headers + data
     
@@ -179,7 +304,11 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     };
     
     // Calculate sizes for nested boxes
-    uint32_t avcCSize = 8 + 3 + 2 + spsToUse.size() + 1 + 2 + ppsToUse.size();
+    // Default SPS/PPS sizes if not provided
+    size_t spsSize = spsToUse.empty() ? 16 : spsToUse.size(); // 16 bytes for default SPS
+    size_t ppsSize = ppsToUse.empty() ? 4 : ppsToUse.size();  // 4 bytes for default PPS
+    
+    uint32_t avcCSize = 8 + 7 + 2 + spsSize + 1 + 2 + ppsSize; // 8(header) + 7(fixed) + 2+sps + 1+2+pps
     uint32_t avc1Size = 8 + 78 + avcCSize;
     uint32_t stsdSize = 8 + 8 + avc1Size;
     uint32_t stblSize = 8 + stsdSize + 16 + 16 + 20 + 20 + 16; // stsd + stts + stss + stsc(20) + stsz + stco
@@ -320,9 +449,18 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     // avcC box (AVC Configuration Box)
     writeBoxHeader(avcCSize, "avcC");
     mp4Data.push_back(1); // configurationVersion
-    mp4Data.push_back(spsToUse.empty() ? 0x42 : (unsigned char)spsToUse[1]); // AVCProfileIndication
-    mp4Data.push_back(spsToUse.empty() ? 0xE0 : (unsigned char)spsToUse[2]); // profile_compatibility
-    mp4Data.push_back(spsToUse.empty() ? 0x1E : (unsigned char)spsToUse[3]); // AVCLevelIndication
+    
+    // Use safe defaults if SPS/PPS are empty or invalid
+    if (!spsToUse.empty() && spsToUse.size() >= 4) {
+        mp4Data.push_back((unsigned char)spsToUse[1]); // AVCProfileIndication
+        mp4Data.push_back((unsigned char)spsToUse[2]); // profile_compatibility
+        mp4Data.push_back((unsigned char)spsToUse[3]); // AVCLevelIndication
+    } else {
+        // Default to Baseline Profile Level 3.0
+        mp4Data.push_back(0x42); // AVCProfileIndication (Baseline Profile)
+        mp4Data.push_back(0x00); // profile_compatibility (no constraints)
+        mp4Data.push_back(0x1E); // AVCLevelIndication (Level 3.0)
+    }
     mp4Data.push_back(0xFF); // lengthSizeMinusOne (4 bytes)
     
     // SPS
@@ -331,14 +469,30 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         writeBE16(spsToUse.size());
         mp4Data.insert(mp4Data.end(), spsToUse.begin(), spsToUse.end());
     } else {
-        writeBE16(0);
+        // Create minimal valid SPS if none provided
+        std::vector<unsigned char> defaultSPS = {
+            0x67, 0x42, 0x00, 0x1E,  // NAL header + profile + level
+            0x8D, 0x8B, 0x40, 0x50,  // Basic SPS parameters
+            0x1E, 0xD0, 0x0F, 0x12,  // More parameters
+            0x74, 0x85, 0x38, 0x4C   // Final data
+        };
+        writeBE16(defaultSPS.size());
+        mp4Data.insert(mp4Data.end(), defaultSPS.begin(), defaultSPS.end());
     }
     
     // PPS
-    mp4Data.push_back(ppsToUse.empty() ? 0 : 1); // numOfPictureParameterSets
     if (!ppsToUse.empty()) {
+        mp4Data.push_back(1); // numOfPictureParameterSets
         writeBE16(ppsToUse.size());
         mp4Data.insert(mp4Data.end(), ppsToUse.begin(), ppsToUse.end());
+    } else {
+        // Create minimal valid PPS if none provided
+        std::vector<unsigned char> defaultPPS = {
+            0x68, 0xCE, 0x3C, 0x80  // Basic PPS data
+        };
+        mp4Data.push_back(1); // numOfPictureParameterSets
+        writeBE16(defaultPPS.size());
+        mp4Data.insert(mp4Data.end(), defaultPPS.begin(), defaultPPS.end());
     }
     
     // 3.2.2.3.3.2 stts box (Decoding Time to Sample Box) - exactly 16 bytes

@@ -91,7 +91,7 @@ jobs:
         echo "Repository cloned successfully"
         ls -la
 
-    - name: �� Cache APT packages
+    - name: 📦 Cache APT packages
       id: cache-apt
       uses: actions/cache@v4
       with:
