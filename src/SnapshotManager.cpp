@@ -24,6 +24,8 @@
 #include <linux/videodev2.h>
 #endif
 
+//#define DEBUG_DUMP_H264_DATA
+
 SnapshotManager::SnapshotManager() 
     : m_enabled(false), m_mode(SnapshotMode::DISABLED), 
       m_width(0), m_height(0), m_snapshotWidth(640), m_snapshotHeight(480), 
@@ -133,7 +135,8 @@ void SnapshotManager::processRawFrame(const unsigned char* yuvData, size_t dataS
 }
 
 void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h264Size, int width, int height, const std::string& sps, const std::string& pps) {
-    // DUMP REAL H.264 DATA FOR ANALYSIS
+#ifdef DEBUG_DUMP_H264_DATA
+    // DUMP REAL H.264 DATA FOR ANALYSIS (only when DEBUG_DUMP_H264_DATA is defined)
     static bool dumpEnabled = true;
     static int dumpCounter = 0;
     
@@ -256,7 +259,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
             dumpEnabled = false;
         }
     }
-    // END DUMP SECTION
+#endif // DEBUG_DUMP_H264_DATA
     
     std::vector<unsigned char> mp4Data;
     mp4Data.reserve(h264Size + 2048); // Reserve space for headers + data
@@ -316,8 +319,11 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     uint32_t mdiaSize = 8 + 32 + 33 + minfSize; // mdhd + hdlr + minf
     uint32_t trakSize = 8 + 92 + mdiaSize; // tkhd (92) + mdia
     uint32_t moovSize = 8 + 108 + trakSize; // mvhd (108 total: 8 header + 100 content) + trak
-    uint32_t mdatSize = 8 + 4 + sizeToUse; // mdat header + NAL length + data
-    uint32_t totalSize = 32 + mdatSize + moovSize; // ftyp + mdat + moov
+    
+    // Calculate mdat size dynamically after H.264 conversion
+    // We'll update this after processing the H.264 data
+    size_t mdatHeaderPos = mp4Data.size(); // Remember position for size update
+    uint32_t totalSize = 32 + moovSize; // ftyp + moov (mdat size will be added later)
     
     // 1. ftyp box (File Type Box) - 32 bytes total
     writeBoxHeader(32, "ftyp");
@@ -329,9 +335,103 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     mp4Data.insert(mp4Data.end(), {'m', 'p', '4', '1'}); // compatible_brands[3]
     
     // 2. mdat box (Media Data Box) - put before moov for streaming
-    writeBoxHeader(mdatSize, "mdat");
-    writeBE32(sizeToUse); // NAL unit length prefix
-    mp4Data.insert(mp4Data.end(), dataToUse, dataToUse + sizeToUse);
+    size_t mdatSizePos = mp4Data.size(); // Remember position for size update
+    writeBoxHeader(0, "mdat"); // Temporary size, will be updated later
+    size_t mdatDataStart = mp4Data.size(); // Start of mdat data
+    
+    // Convert H.264 data from Annex B format (start codes) to AVCC format (length prefix)
+    // H.264 data from camera typically has start codes (0x00000001 or 0x000001)
+    // MP4 container requires NAL units with length prefix instead
+    
+    const unsigned char* currentPos = dataToUse;
+    const unsigned char* endPos = dataToUse + sizeToUse;
+    bool foundStartCodes = false;
+    
+    // First, check if data contains start codes
+    while (currentPos < endPos - 3) {
+        if ((currentPos[0] == 0x00 && currentPos[1] == 0x00 && 
+             currentPos[2] == 0x00 && currentPos[3] == 0x01) ||
+            (currentPos[0] == 0x00 && currentPos[1] == 0x00 && currentPos[2] == 0x01)) {
+            foundStartCodes = true;
+            break;
+        }
+        currentPos++;
+    }
+    
+    currentPos = dataToUse; // Reset position
+    
+    if (foundStartCodes) {
+        // Process data with start codes (Annex B format)
+        while (currentPos < endPos) {
+            // Look for start code (0x00000001 or 0x000001)
+            const unsigned char* nalStart = nullptr;
+            size_t startCodeSize = 0;
+            
+            // Check for 4-byte start code (0x00000001)
+            if (currentPos + 4 <= endPos && 
+                currentPos[0] == 0x00 && currentPos[1] == 0x00 && 
+                currentPos[2] == 0x00 && currentPos[3] == 0x01) {
+                nalStart = currentPos + 4;
+                startCodeSize = 4;
+            }
+            // Check for 3-byte start code (0x000001)
+            else if (currentPos + 3 <= endPos && 
+                     currentPos[0] == 0x00 && currentPos[1] == 0x00 && currentPos[2] == 0x01) {
+                nalStart = currentPos + 3;
+                startCodeSize = 3;
+            }
+            
+            if (nalStart) {
+                // Find next start code or end of data
+                const unsigned char* nextStart = nalStart;
+                while (nextStart < endPos) {
+                    if ((nextStart + 4 <= endPos && 
+                         nextStart[0] == 0x00 && nextStart[1] == 0x00 && 
+                         nextStart[2] == 0x00 && nextStart[3] == 0x01) ||
+                        (nextStart + 3 <= endPos && 
+                         nextStart[0] == 0x00 && nextStart[1] == 0x00 && nextStart[2] == 0x01)) {
+                        break;
+                    }
+                    nextStart++;
+                }
+                
+                // Calculate NAL unit size
+                size_t nalSize = nextStart - nalStart;
+                
+                if (nalSize > 0) {
+                    // Write NAL unit length prefix (4 bytes big-endian)
+                    writeBE32(nalSize);
+                    // Write NAL unit data
+                    mp4Data.insert(mp4Data.end(), nalStart, nalStart + nalSize);
+                }
+                
+                currentPos = nextStart;
+            } else {
+                // No start code found, treat remaining data as single NAL unit
+                if (currentPos < endPos) {
+                    size_t remainingSize = endPos - currentPos;
+                    writeBE32(remainingSize);
+                    mp4Data.insert(mp4Data.end(), currentPos, endPos);
+                }
+                break;
+            }
+        }
+    } else {
+        // Data doesn't contain start codes, treat as single NAL unit (already in correct format)
+        // Just add length prefix for the entire data
+        writeBE32(sizeToUse);
+        mp4Data.insert(mp4Data.end(), dataToUse, dataToUse + sizeToUse);
+    }
+    
+    // Update mdat box size now that we know the actual data size
+    size_t mdatDataSize = mp4Data.size() - mdatDataStart;
+    uint32_t mdatSize = 8 + mdatDataSize; // 8 bytes header + actual data size
+    
+    // Update the mdat size in the header (big-endian)
+    mp4Data[mdatSizePos] = (mdatSize >> 24) & 0xFF;
+    mp4Data[mdatSizePos + 1] = (mdatSize >> 16) & 0xFF;
+    mp4Data[mdatSizePos + 2] = (mdatSize >> 8) & 0xFF;
+    mp4Data[mdatSizePos + 3] = mdatSize & 0xFF;
     
     // 3. moov box (Movie Box)
     writeBoxHeader(moovSize, "moov");
@@ -520,7 +620,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     // 3.2.2.3.3.5 stsz box (Sample Size Box) - exactly 20 bytes
     writeBoxHeader(20, "stsz");
     mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
-    writeBE32(sizeToUse + 4); // sample_size (including NAL length prefix)
+    writeBE32(mdatDataSize); // sample_size (actual size of converted H.264 data)
     writeBE32(1); // sample_count
     
     // 3.2.2.3.3.6 stco box (Chunk Offset Box) - exactly 16 bytes
