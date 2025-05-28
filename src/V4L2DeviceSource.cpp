@@ -16,6 +16,7 @@
 // project
 #include "logger.h"
 #include "V4L2DeviceSource.h"
+#include "SnapshotManager.h"
 
 // ---------------------------------
 // V4L2 FramedSource Stats
@@ -223,6 +224,21 @@ void V4L2DeviceSource::postFrame(char * frame, int frameSize, const timeval &ref
 	timersub(&tv,&ref,&diff);
 	m_in.notify(tv.tv_sec, frameSize);
 	LOG(DEBUG) << "postFrame\ttimestamp:" << ref.tv_sec << "." << ref.tv_usec << "\tsize:" << frameSize <<"\tdiff:" <<  (diff.tv_sec*1000+diff.tv_usec/1000) << "ms";
+	
+	// Process raw frame for snapshot if enabled and device has raw format
+	if (SnapshotManager::getInstance().isEnabled() && m_device) {
+		unsigned int format = m_device->getVideoFormat();
+		// Check if this is a YUV/raw format that can be converted to images
+		if (format == V4L2_PIX_FMT_YUYV || format == V4L2_PIX_FMT_UYVY || 
+		    format == V4L2_PIX_FMT_YUV420 || format == V4L2_PIX_FMT_NV12 ||
+		    format == V4L2_PIX_FMT_RGB24 || format == V4L2_PIX_FMT_BGR24) {
+			// Pass raw frame data for YUV->image conversion
+			SnapshotManager::getInstance().processRawFrame(
+				(unsigned char*)frame, frameSize, 
+				m_device->getWidth(), m_device->getHeight()
+			);
+		}
+	}
 	
 	processFrame(frame,frameSize,ref);
 	if (m_outfd != -1) 

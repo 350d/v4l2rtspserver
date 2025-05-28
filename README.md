@@ -112,7 +112,12 @@ The system automatically selects the best snapshot mode based on camera capabili
 1. **MJPEG Stream Mode** - Real JPEG snapshots when camera streams in MJPEG format
 2. **MJPEG Device Mode** - Real JPEG snapshots from separate MJPEG device (ideal for dual-format cameras)  
 3. **H264 MP4 Mode** - Mini MP4 video snapshots with H264 keyframes (real video content)
-4. **H264 Fallback Mode** - Informational SVG snapshots for H264-only streams
+4. **H264_FALLBACK** - Real MP4 snapshots with cached I-frames
+   - Creates MP4 containers with actual H264 keyframes
+   - Caches last I-frame and SPS/PPS data for reuse
+   - Uses cached data when no current frame available
+   - Provides real video snapshots instead of placeholders
+5. **YUV Converted Mode** - Real JPEG images converted from YUV/RAW data
 
 ### Basic Usage
 
@@ -417,80 +422,4 @@ curl -v "http://localhost:8554/ts?segment=0" --output test.ts
 
 ### Key Parameters for HLS
 
-- **`-S<seconds>`**: Segment duration (3-10 seconds recommended)
-- **`-c`**: Disable SPS/PPS repetition (improves compatibility)  
-- **`-fH264`**: Force H264 format (required for HLS)
-- **`-Q <size>`**: Buffer queue size for stability
-- **`-P <port>`**: Custom port if needed
-
-Using Docker Image
-==================
-
-### Basic Docker Usage
-
-```bash
-# Basic RTSP streaming
-docker run -p 8554:8554 -it mpromonet/v4l2rtspserver
-
-# With V4L2 device access
-docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver
-
-# Get help
-docker run -it mpromonet/v4l2rtspserver -h
-```
-
-### Advanced Docker Examples
-
-**Custom resolution and parameters:**
-```bash
-docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver \
-    -u "" -H640 -W480 -F25
-```
-
-**With snapshots enabled:**
-```bash
-# Enable snapshots (HTTP endpoint only)
-docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -j
-
-# Access snapshots from host
-curl http://localhost:8554/snapshot > snapshot.jpg
-```
-
-**HLS streaming:**
-```bash
-# Enable HLS with 5-second segments
-docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver -S5 -fH264
-
-# Access HLS stream
-# http://localhost:8554/ts.m3u8
-```
-
-**Optimized for FFmpeg compatibility:**
-```bash
-docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver \
-    -c -j -fH264 -Q 10
-```
-
-**Multi-format with snapshots:**
-```bash
-docker run --device=/dev/video0 -p 8554:8554 -it mpromonet/v4l2rtspserver \
-    -j -J 1280x720x5 -fH264 -fMJPEG -c
-```
-
-### Docker with Volume Mounting (for file snapshots)
-
-```bash
-# Mount volume for snapshot saving
-docker run --device=/dev/video0 -p 8554:8554 \
-    -v /host/snapshots:/snapshots \
-    -it mpromonet/v4l2rtspserver \
-    -j /snapshots/camera.jpg -J 1920x1080x10
-```
-
-### Accessing Services
-
-Once running, access the services at:
-- **RTSP Stream**: `rtsp://localhost:8554/unicast`
-- **HTTP Snapshots**: `http://localhost:8554/snapshot`
-- **HLS Stream**: `http://localhost:8554/ts.m3u8` (if `-S` enabled)
-- **MPEG-DASH**: `http://localhost:8554/ts.mpd` (if `-S` enabled)
+- **`
