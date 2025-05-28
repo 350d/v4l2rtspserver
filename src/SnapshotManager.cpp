@@ -304,9 +304,9 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     };
     
     // Calculate sizes for nested boxes
-    // Default SPS/PPS sizes if not provided
-    size_t spsSize = spsToUse.empty() ? 16 : spsToUse.size(); // 16 bytes for default SPS
-    size_t ppsSize = ppsToUse.empty() ? 4 : ppsToUse.size();  // 4 bytes for default PPS
+    // Use real SPS/PPS sizes if available, otherwise use universal fallback sizes
+    size_t spsSize = spsToUse.empty() ? 16 : spsToUse.size(); // Universal fallback: 16 bytes
+    size_t ppsSize = ppsToUse.empty() ? 5 : ppsToUse.size();  // Universal fallback: 5 bytes
     
     uint32_t avcCSize = 8 + 7 + 2 + spsSize + 1 + 2 + ppsSize; // 8(header) + 7(fixed) + 2+sps + 1+2+pps
     uint32_t avc1Size = 8 + 78 + avcCSize;
@@ -450,49 +450,50 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     writeBoxHeader(avcCSize, "avcC");
     mp4Data.push_back(1); // configurationVersion
     
-    // Use safe defaults if SPS/PPS are empty or invalid
+    // PRIORITY 1: Use real SPS data from camera if available
     if (!spsToUse.empty() && spsToUse.size() >= 4) {
-        mp4Data.push_back((unsigned char)spsToUse[1]); // AVCProfileIndication
-        mp4Data.push_back((unsigned char)spsToUse[2]); // profile_compatibility
-        mp4Data.push_back((unsigned char)spsToUse[3]); // AVCLevelIndication
+        // Extract real profile/level from actual camera SPS
+        mp4Data.push_back((unsigned char)spsToUse[1]); // AVCProfileIndication from real SPS
+        mp4Data.push_back((unsigned char)spsToUse[2]); // profile_compatibility from real SPS
+        mp4Data.push_back((unsigned char)spsToUse[3]); // AVCLevelIndication from real SPS
     } else {
-        // Default to Baseline Profile Level 3.0
-        mp4Data.push_back(0x42); // AVCProfileIndication (Baseline Profile)
+        // FALLBACK: Use universal High Profile Level 4.0 (compatible with most cameras)
+        mp4Data.push_back(0x64); // AVCProfileIndication (High Profile - widely supported)
         mp4Data.push_back(0x00); // profile_compatibility (no constraints)
-        mp4Data.push_back(0x1E); // AVCLevelIndication (Level 3.0)
+        mp4Data.push_back(0x28); // AVCLevelIndication (Level 4.0 - up to 1080p)
     }
     mp4Data.push_back(0xFF); // lengthSizeMinusOne (4 bytes)
     
-    // SPS
+    // SPS - PRIORITY 1: Use real camera data
     mp4Data.push_back(0xE1); // numOfSequenceParameterSets (0xE0 | 1)
     if (!spsToUse.empty()) {
+        // Use actual SPS from camera
         writeBE16(spsToUse.size());
         mp4Data.insert(mp4Data.end(), spsToUse.begin(), spsToUse.end());
     } else {
-        // Create minimal valid SPS if none provided
-        std::vector<unsigned char> defaultSPS = {
-            0x67, 0x42, 0x00, 0x1E,  // NAL header + profile + level
-            0x8D, 0x8B, 0x40, 0x50,  // Basic SPS parameters
-            0x1E, 0xD0, 0x0F, 0x12,  // More parameters
-            0x74, 0x85, 0x38, 0x4C   // Final data
+        // FALLBACK: Use universal SPS that works with most H.264 decoders
+        std::vector<unsigned char> universalSPS = {
+            0x27, 0x64, 0x00, 0x28, 0xac, 0x2b, 0x40, 0x3c,
+            0x01, 0x13, 0xf2, 0xc0, 0x3c, 0x48, 0x9a, 0x80
         };
-        writeBE16(defaultSPS.size());
-        mp4Data.insert(mp4Data.end(), defaultSPS.begin(), defaultSPS.end());
+        writeBE16(universalSPS.size());
+        mp4Data.insert(mp4Data.end(), universalSPS.begin(), universalSPS.end());
     }
     
-    // PPS
+    // PPS - PRIORITY 1: Use real camera data
     if (!ppsToUse.empty()) {
+        // Use actual PPS from camera
         mp4Data.push_back(1); // numOfPictureParameterSets
         writeBE16(ppsToUse.size());
         mp4Data.insert(mp4Data.end(), ppsToUse.begin(), ppsToUse.end());
     } else {
-        // Create minimal valid PPS if none provided
-        std::vector<unsigned char> defaultPPS = {
-            0x68, 0xCE, 0x3C, 0x80  // Basic PPS data
+        // FALLBACK: Use universal PPS that works with most H.264 decoders
+        std::vector<unsigned char> universalPPS = {
+            0x28, 0xee, 0x02, 0x5c, 0xb0
         };
         mp4Data.push_back(1); // numOfPictureParameterSets
-        writeBE16(defaultPPS.size());
-        mp4Data.insert(mp4Data.end(), defaultPPS.begin(), defaultPPS.end());
+        writeBE16(universalPPS.size());
+        mp4Data.insert(mp4Data.end(), universalPPS.begin(), universalPPS.end());
     }
     
     // 3.2.2.3.3.2 stts box (Decoding Time to Sample Box) - exactly 16 bytes
