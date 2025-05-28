@@ -178,19 +178,17 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         mp4Data.insert(mp4Data.end(), type, type + 4);
     };
     
-    // Calculate exact sizes according to ISO 14496-1 specification
-    size_t avcCSize = 11; // Base avcC size
-    if (!spsToUse.empty()) avcCSize += 3 + spsToUse.size(); // SPS length + data
-    if (!ppsToUse.empty()) avcCSize += 3 + ppsToUse.size(); // PPS length + data
-    
-    size_t avc1Size = 86 + avcCSize; // avc1 sample entry size
-    size_t stsdSize = 16 + avc1Size; // stsd box size
-    size_t stblSize = 8 + stsdSize + 16 + 16 + 16 + 20 + 16; // stbl with all sample table boxes
-    size_t minfSize = 8 + 20 + 36 + stblSize; // minf box size
-    size_t mdiaSize = 8 + 32 + 33 + minfSize; // mdia box size (hdlr is 33 bytes)
-    size_t trakSize = 8 + 84 + mdiaSize; // trak box size
-    size_t moovSize = 8 + 100 + trakSize; // moov box size (mvhd is 100 bytes)
-    size_t mdatSize = 8 + 4 + sizeToUse; // mdat box size
+    // Calculate sizes for nested boxes
+    uint32_t avcCSize = 8 + 3 + 2 + spsToUse.size() + 1 + 2 + ppsToUse.size();
+    uint32_t avc1Size = 8 + 78 + avcCSize;
+    uint32_t stsdSize = 8 + 8 + avc1Size;
+    uint32_t stblSize = 8 + stsdSize + 16 + 16 + 20 + 20 + 16; // stsd + stts + stss + stsc(20) + stsz + stco
+    uint32_t minfSize = 8 + 20 + 36 + stblSize; // vmhd + dinf + stbl
+    uint32_t mdiaSize = 8 + 32 + 33 + minfSize; // mdhd + hdlr + minf
+    uint32_t trakSize = 8 + 92 + mdiaSize; // tkhd (corrected to 92) + mdia
+    uint32_t moovSize = 8 + 100 + trakSize; // mvhd + trak
+    uint32_t mdatSize = 8 + 4 + sizeToUse; // mdat header + NAL length + data
+    uint32_t totalSize = 32 + mdatSize + moovSize; // ftyp + mdat + moov
     
     // 1. ftyp box (File Type Box) - 32 bytes total
     writeBoxHeader(32, "ftyp");
@@ -213,13 +211,10 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     writeBoxHeader(100, "mvhd");
     mp4Data.push_back(0); // version (0 for 32-bit times)
     mp4Data.insert(mp4Data.end(), 3, 0); // flags (24 bits)
-    // 32-bit creation_time
-    writeBE32(0);
-    // 32-bit modification_time  
-    writeBE32(0);
+    writeBE32(0); // creation_time
+    writeBE32(0); // modification_time  
     writeBE32(1000); // timescale
-    // 32-bit duration
-    writeBE32(1000); // 1 second duration
+    writeBE32(1000); // duration
     writeBE32(0x00010000); // rate (1.0 fixed point)
     writeBE16(0x0100); // volume (1.0 fixed point)
     writeBE16(0); // reserved
@@ -228,29 +223,22 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     writeBE32(0x00010000); writeBE32(0); writeBE32(0);
     writeBE32(0); writeBE32(0x00010000); writeBE32(0);
     writeBE32(0); writeBE32(0); writeBE32(0x40000000);
-    // pre_defined - 6x32 bits = 24 bytes (but we need only 16 bytes for version 0)
+    // pre_defined - 4x32 bits = 16 bytes (corrected for version 0)
     writeBE32(0); writeBE32(0); writeBE32(0); writeBE32(0);
     writeBE32(2); // next_track_ID
-    
-    // Total mvhd content: 8(header) + 1(version) + 3(flags) + 4(creation) + 4(modification) + 
-    // 4(timescale) + 4(duration) + 4(rate) + 2(volume) + 2(reserved) + 8(reserved) + 
-    // 36(matrix) + 16(pre_defined) + 4(next_track_ID) = 100 bytes
     
     // 3.2 trak box (Track Box)
     writeBoxHeader(trakSize, "trak");
     
-    // 3.2.1 tkhd box (Track Header Box) - exactly 84 bytes for version 0
-    writeBoxHeader(84, "tkhd");
+    // 3.2.1 tkhd box (Track Header Box) - exactly 92 bytes for version 0
+    writeBoxHeader(92, "tkhd");
     mp4Data.push_back(0); // version (0 for 32-bit times)
-    mp4Data.insert(mp4Data.end(), 3, 0x07); // flags (track enabled, in movie, in preview)
-    // 32-bit creation_time
-    writeBE32(0);
-    // 32-bit modification_time
-    writeBE32(0);
+    mp4Data.push_back(0); mp4Data.push_back(0); mp4Data.push_back(0x07); // flags (track enabled, in movie, in preview)
+    writeBE32(0); // creation_time
+    writeBE32(0); // modification_time
     writeBE32(1); // track_ID
     writeBE32(0); // reserved
-    // 32-bit duration
-    writeBE32(1000);
+    writeBE32(1000); // duration
     writeBE32(0); writeBE32(0); // reserved (2x32 bits)
     writeBE16(0); // layer
     writeBE16(0); // alternate_group
@@ -366,8 +354,8 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     writeBE32(1); // entry_count
     writeBE32(1); // sample_number
     
-    // 3.2.2.3.3.4 stsc box (Sample to Chunk Box) - exactly 16 bytes
-    writeBoxHeader(16, "stsc");
+    // 3.2.2.3.3.4 stsc box (Sample to Chunk Box) - exactly 20 bytes
+    writeBoxHeader(20, "stsc");
     mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
     writeBE32(1); // entry_count
     writeBE32(1); // first_chunk
