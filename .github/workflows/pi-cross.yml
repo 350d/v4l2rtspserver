@@ -91,8 +91,9 @@ jobs:
         echo "Repository cloned successfully"
         ls -la
 
-    - name: 💾 Cache APT packages
-      uses: actions/cache@v4
+    - name: �� Cache APT packages (restore)
+      id: cache-apt
+      uses: actions/cache/restore@v4
       with:
         path: |
           /var/cache/apt/archives
@@ -101,7 +102,6 @@ jobs:
         restore-keys: |
           apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v4-
           apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-
-        save-always: true
 
     - name: 🛠️ Install Cross-Compilation Tools
       run: |
@@ -494,6 +494,15 @@ jobs:
         echo " cd v4l2rtspserver-${{ matrix.config.target }}"
         echo " chmod +x v4l2rtspserver"
         echo " ./v4l2rtspserver /dev/video0"
+
+    - name: 💾 Save APT cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v4-${{ hashFiles('/etc/apt/sources.list', '/etc/apt/sources.list.d/*') }}
 
   # Summary job that runs after all builds complete
   download-summary:

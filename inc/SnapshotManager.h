@@ -16,6 +16,7 @@
 #include <string>
 #include <memory>
 #include <ctime>
+#include <chrono>
 
 // Forward declaration
 struct V4L2DeviceParameters;
@@ -92,6 +93,11 @@ private:
     mutable std::mutex m_snapshotMutex;
     std::vector<unsigned char> m_currentSnapshot;
     std::time_t m_lastSnapshotTime;
+    
+    // Snapshot data storage
+    std::vector<unsigned char> m_snapshotData;
+    std::string m_snapshotMimeType;
+    std::chrono::steady_clock::time_point m_lastSnapshotTimePoint;
     
     // File operations
     std::string m_filePath;

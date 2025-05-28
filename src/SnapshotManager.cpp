@@ -27,7 +27,7 @@
 SnapshotManager::SnapshotManager() 
     : m_enabled(false), m_mode(SnapshotMode::DISABLED), 
       m_width(0), m_height(0), m_snapshotWidth(640), m_snapshotHeight(480), 
-      m_lastSnapshotTime(0), m_saveInterval(5), m_lastSaveTime(0),
+      m_lastSnapshotTime(0), m_snapshotMimeType("image/jpeg"), m_saveInterval(5), m_lastSaveTime(0),
       m_lastFrameWidth(0), m_lastFrameHeight(0) {
 }
 
@@ -82,7 +82,10 @@ void SnapshotManager::processMJPEGFrame(const unsigned char* jpegData, size_t da
     // This is called from MJPEGVideoSource - we have real JPEG data!
     std::lock_guard<std::mutex> lock(m_snapshotMutex);
     m_currentSnapshot.assign(jpegData, jpegData + dataSize);
+    m_snapshotData.assign(jpegData, jpegData + dataSize);
+    m_snapshotMimeType = "image/jpeg";
     m_lastSnapshotTime = std::time(nullptr);
+    m_lastSnapshotTimePoint = std::chrono::steady_clock::now();
     
     // Update mode if we weren't sure before
     if (m_mode == SnapshotMode::H264_FALLBACK) {
@@ -388,12 +391,22 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         std::lock_guard<std::mutex> lock(m_snapshotMutex);
         m_snapshotData = std::move(mp4Data);
         m_snapshotMimeType = "video/mp4";
-        m_lastSnapshotTime = std::chrono::steady_clock::now();
+        m_lastSnapshotTimePoint = std::chrono::steady_clock::now();
+        
+        // Also update current snapshot for compatibility
+        m_currentSnapshot = m_snapshotData;
+        m_lastSnapshotTime = std::time(nullptr);
     }
 }
 
 bool SnapshotManager::getSnapshot(std::vector<unsigned char>& jpegData) {
     std::lock_guard<std::mutex> lock(m_snapshotMutex);
+    
+    // Prefer snapshotData if available (for MP4), otherwise use currentSnapshot
+    if (!m_snapshotData.empty()) {
+        jpegData = m_snapshotData;
+        return true;
+    }
     
     if (m_currentSnapshot.empty()) {
         return false;
@@ -406,55 +419,61 @@ bool SnapshotManager::getSnapshot(std::vector<unsigned char>& jpegData) {
 std::string SnapshotManager::getSnapshotMimeType() const {
     std::lock_guard<std::mutex> lock(m_snapshotMutex);
     
+    // Use stored MIME type if available
+    if (!m_snapshotMimeType.empty() && !m_snapshotData.empty()) {
+        return m_snapshotMimeType;
+    }
+    
     // Check actual content type if we have data
-    if (!m_currentSnapshot.empty()) {
+    const std::vector<unsigned char>& dataToCheck = !m_currentSnapshot.empty() ? m_currentSnapshot : m_snapshotData;
+    if (!dataToCheck.empty()) {
         // Check for JPEG magic bytes (FF D8 FF)
-        if (m_currentSnapshot.size() >= 3 && 
-            m_currentSnapshot[0] == 0xFF && 
-            m_currentSnapshot[1] == 0xD8 && 
-            m_currentSnapshot[2] == 0xFF) {
+        if (dataToCheck.size() >= 3 && 
+            dataToCheck[0] == 0xFF && 
+            dataToCheck[1] == 0xD8 && 
+            dataToCheck[2] == 0xFF) {
             return "image/jpeg";
         }
         
         // Check for PNG magic bytes (89 50 4E 47)
-        if (m_currentSnapshot.size() >= 4 && 
-            m_currentSnapshot[0] == 0x89 && 
-            m_currentSnapshot[1] == 0x50 && 
-            m_currentSnapshot[2] == 0x4E && 
-            m_currentSnapshot[3] == 0x47) {
+        if (dataToCheck.size() >= 4 && 
+            dataToCheck[0] == 0x89 && 
+            dataToCheck[1] == 0x50 && 
+            dataToCheck[2] == 0x4E && 
+            dataToCheck[3] == 0x47) {
             return "image/png";
         }
         
         // Check for PPM format (starts with "P6")
-        if (m_currentSnapshot.size() >= 2 && 
-            m_currentSnapshot[0] == 'P' && 
-            m_currentSnapshot[1] == '6') {
+        if (dataToCheck.size() >= 2 && 
+            dataToCheck[0] == 'P' && 
+            dataToCheck[1] == '6') {
             return "image/x-portable-pixmap";
         }
         
         // Check for SVG content (starts with "<?xml" or "<svg")
-        if (m_currentSnapshot.size() >= 5) {
-            std::string start(m_currentSnapshot.begin(), m_currentSnapshot.begin() + 5);
+        if (dataToCheck.size() >= 5) {
+            std::string start(dataToCheck.begin(), dataToCheck.begin() + 5);
             if (start == "<?xml" || start == "<svg ") {
                 return "image/svg+xml";
             }
         }
         
         // Check for H264 Annex B format (starts with 0x00000001)
-        if (m_currentSnapshot.size() >= 4 && 
-            m_currentSnapshot[0] == 0x00 && 
-            m_currentSnapshot[1] == 0x00 && 
-            m_currentSnapshot[2] == 0x00 && 
-            m_currentSnapshot[3] == 0x01) {
+        if (dataToCheck.size() >= 4 && 
+            dataToCheck[0] == 0x00 && 
+            dataToCheck[1] == 0x00 && 
+            dataToCheck[2] == 0x00 && 
+            dataToCheck[3] == 0x01) {
             return "video/h264";
         }
         
         // Check for MP4 format (starts with ftyp box size + "ftyp")
-        if (m_currentSnapshot.size() >= 8 && 
-            m_currentSnapshot[4] == 'f' && 
-            m_currentSnapshot[5] == 't' && 
-            m_currentSnapshot[6] == 'y' && 
-            m_currentSnapshot[7] == 'p') {
+        if (dataToCheck.size() >= 8 && 
+            dataToCheck[4] == 'f' && 
+            dataToCheck[5] == 't' && 
+            dataToCheck[6] == 'y' && 
+            dataToCheck[7] == 'p') {
                 return "video/mp4";
         }
     }
@@ -755,7 +774,10 @@ bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t data
         {
             std::lock_guard<std::mutex> lock(m_snapshotMutex);
             m_currentSnapshot = jpegData;
+            m_snapshotData = jpegData;
+            m_snapshotMimeType = "image/jpeg";
             m_lastSnapshotTime = std::time(nullptr);
+            m_lastSnapshotTimePoint = std::chrono::steady_clock::now();
             
             // Update mode to indicate we have real image data
             if (m_mode == SnapshotMode::H264_FALLBACK) {
