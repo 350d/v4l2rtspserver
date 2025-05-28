@@ -356,7 +356,7 @@ int main(int argc, char** argv)
 					LOG(NOTICE) << "Snapshot auto-save enabled to: " << snapshotFilePath << " (interval: " << snapshotSaveInterval << "s)";
 				}
 				
-				if (!SnapshotManager::getInstance().initializeWithDevice(videoDev)) {
+				if (!SnapshotManager::getInstance().initialize(width, height)) {
 					LOG(WARN) << "Failed to fully initialize SnapshotManager - falling back to basic mode";
 				}
 				LOG(NOTICE) << "SnapshotManager mode: " << SnapshotManager::getInstance().getModeDescription();
