@@ -95,22 +95,29 @@ jobs:
       uses: actions/cache@v4
       with:
         path: |
-          /var/cache/apt/archives/*.deb
-          /var/lib/apt/lists/*_Packages
-          /var/lib/apt/lists/*_Release
-        key: apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v3
+          /var/cache/apt/archives
+          /var/lib/apt/lists
+        key: apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v4-${{ hashFiles('/etc/apt/sources.list', '/etc/apt/sources.list.d/*') }}
         restore-keys: |
+          apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v4-
           apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-
-          apt-cache-${{ matrix.config.arch }}-
-          apt-cache-
+        save-always: true
 
     - name: 🛠️ Install Cross-Compilation Tools
       run: |
+        # Clean any existing problematic cache files first
+        sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/cache/apt/archives/partial
+        sudo rm -f /var/lib/apt/lists/*microsoft* 2>/dev/null || true
+        
         # Single apt-get update + install to reduce redundant updates
         echo "📦 Installing cross-compilation tools for ${{ matrix.config.arch }}..."
         
+        # Clear and update package lists
+        sudo apt-get clean
+        sudo apt-get update
+        
         if [ "${{ matrix.config.arch }}" = "aarch64" ]; then
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+          sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross \
@@ -118,7 +125,7 @@ jobs:
             cmake \
             pkg-config
         else
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+          sudo apt-get install -y --no-install-recommends \
             gcc-arm-linux-gnueabi \
             g++-arm-linux-gnueabi \
             gcc-arm-linux-gnueabihf \
@@ -133,11 +140,17 @@ jobs:
         
         echo "✅ Cross-compilation tools installed"
         
-        # Clean up to reduce cache size, but preserve cached files
+        # Clean up problematic files that cause cache conflicts
+        sudo rm -f /var/lib/apt/lists/*microsoft* 2>/dev/null || true
+        sudo rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock
+        sudo rm -rf /var/cache/apt/archives/partial
+        
+        # Clean up but preserve architecture-specific files
         sudo apt-get autoclean
-        # Remove only temporary files, keep .deb packages and package lists for caching
-        sudo find /var/cache/apt/archives -name "*.deb" -type f -exec touch {} \; 2>/dev/null || true
-        sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/cache/apt/archives/partial
+        
+        # Ensure cache directory permissions are correct
+        sudo chmod -R 755 /var/cache/apt/archives 2>/dev/null || true
+        sudo chmod -R 755 /var/lib/apt/lists 2>/dev/null || true
 
     - name: ⚙️ Configure Build Environment
       run: |
