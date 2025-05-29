@@ -50,7 +50,8 @@ public:
         
         // Create directory
         std::string cmd = "mkdir -p " + dumpDir;
-        system(cmd.c_str());
+        int result = system(cmd.c_str());
+        (void)result; // Suppress unused result warning
         
         LOG(NOTICE) << "🎬 Full data dumper initialized: " << dumpDir;
         initialized = true;
