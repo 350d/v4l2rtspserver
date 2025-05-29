@@ -53,15 +53,23 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 			
 			if (!outputFile.empty())
 			{
-				V4L2DeviceParameters outparam(outputFile.c_str(), videoCapture->getFormat(), videoCapture->getWidth(), videoCapture->getHeight(), 0, ioTypeOut);
-				out = V4l2Output::create(outparam);
-				if (out != NULL)
-				{
-					outfd = out->getFd();
-					LOG(INFO) << "Output fd:" << outfd << " " << outputFile;
-				} else {
-					// Fallback: try to open as regular file for writing
-					LOG(INFO) << "V4L2 output failed, trying regular file: " << outputFile;
+				// Check if it looks like a V4L2 device path before attempting V4L2 creation
+				bool isV4L2Device = (outputFile.find("/dev/video") == 0);
+				
+				if (isV4L2Device) {
+					V4L2DeviceParameters outparam(outputFile.c_str(), videoCapture->getFormat(), videoCapture->getWidth(), videoCapture->getHeight(), 0, ioTypeOut);
+					out = V4l2Output::create(outparam);
+					if (out != NULL) {
+						outfd = out->getFd();
+						LOG(INFO) << "Output fd:" << outfd << " " << outputFile;
+					} else {
+						LOG(WARN) << "Cannot open V4L2 output device:" << outputFile;
+					}
+				}
+				
+				if (outfd == -1) {
+					// Try to open as regular file for writing
+					LOG(INFO) << (isV4L2Device ? "V4L2 output failed, trying regular file: " : "Opening regular file: ") << outputFile;
 					outfd = open(outputFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 					if (outfd != -1) {
 						LOG(INFO) << "Opened regular file for output: " << outputFile << " fd:" << outfd;
