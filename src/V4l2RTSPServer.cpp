@@ -10,6 +10,8 @@
 ** -------------------------------------------------------------------------*/
 
 #include <dirent.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #include <sstream>
 
@@ -58,7 +60,14 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 					outfd = out->getFd();
 					LOG(INFO) << "Output fd:" << outfd << " " << outputFile;
 				} else {
-					LOG(WARN) << "Cannot open output:" << outputFile;
+					// Fallback: try to open as regular file for writing
+					LOG(INFO) << "V4L2 output failed, trying regular file: " << outputFile;
+					outfd = open(outputFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+					if (outfd != -1) {
+						LOG(INFO) << "Opened regular file for output: " << outputFile << " fd:" << outfd;
+					} else {
+						LOG(WARN) << "Cannot open output:" << outputFile << " err:" << strerror(errno);
+					}
 				}
 			}
 			
