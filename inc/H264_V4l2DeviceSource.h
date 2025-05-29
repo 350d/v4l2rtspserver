@@ -20,8 +20,7 @@ class MP4Muxer; // Forward declaration
 // ---------------------------------
 // H264 V4L2 FramedSource
 // ---------------------------------
-const char H264marker[] = {0,0,0,1};
-const char H264shortmarker[] = {0,0,1};
+// Note: H264marker and H264shortmarker are defined in H26x_V4l2DeviceSource.h
 
 class H264_V4L2DeviceSource : public H26X_V4L2DeviceSource
 {
@@ -37,9 +36,7 @@ class H264_V4L2DeviceSource : public H26X_V4L2DeviceSource
 			// This could be improved by passing a flag from the caller
 		}
 
-		virtual ~H264_V4L2DeviceSource() {
-			delete m_mp4Muxer;
-		}
+		virtual ~H264_V4L2DeviceSource();
 
 		// overide V4L2DeviceSource
 		virtual std::list< std::pair<unsigned char*,size_t> > splitFrames(unsigned char* frame, unsigned frameSize);

@@ -25,6 +25,9 @@
 // H264 V4L2 FramedSource
 // ---------------------------------
 
+H264_V4L2DeviceSource::~H264_V4L2DeviceSource() {
+	delete m_mp4Muxer;
+}
 
 // split packet in frames					
 std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames(unsigned char* frame, unsigned frameSize) 
@@ -51,8 +54,12 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 				hasKeyFrame = true;
 				// Process H264 keyframe for snapshot if enabled
 				if (SnapshotManager::getInstance().isEnabled()) {
+					// Get actual frame dimensions from device
+					int frameWidth = (m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920;
+					int frameHeight = (m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080;
+					
 					// Pass SPS/PPS data along with keyframe for better snapshot creation
-					SnapshotManager::getInstance().processH264KeyframeWithSPS(buffer, size, m_sps, m_pps, 0, 0);
+					SnapshotManager::getInstance().processH264KeyframeWithSPS(buffer, size, m_sps, m_pps, frameWidth, frameHeight);
 				}
 				// FIXED: Avoid duplicating SPS/PPS in stream - they are sent via getInitFrames()
 				// This prevents FFmpeg decoding issues caused by redundant parameter sets
