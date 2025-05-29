@@ -24,7 +24,7 @@ class MP4Muxer; // Forward declaration
 
 class H264_V4L2DeviceSource : public H26X_V4L2DeviceSource
 {
-	public:
+	public:				
 		static H264_V4L2DeviceSource* createNew(UsageEnvironment& env, DeviceInterface * device, int outputFd, unsigned int queueSize, CaptureMode captureMode, bool repeatConfig, bool keepMarker) {
 			return new H264_V4L2DeviceSource(env, device, outputFd, queueSize, captureMode, repeatConfig, keepMarker);
 		}
@@ -37,7 +37,7 @@ class H264_V4L2DeviceSource : public H26X_V4L2DeviceSource
 		}
 
 		virtual ~H264_V4L2DeviceSource();
-
+	
 		// overide V4L2DeviceSource
 		virtual std::list< std::pair<unsigned char*,size_t> > splitFrames(unsigned char* frame, unsigned frameSize);
 		virtual std::list< std::string > getInitFrames();

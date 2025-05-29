@@ -58,12 +58,12 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 				bool isMP4File = (outputFile.substr(outputFile.find_last_of('.') + 1) == "mp4");
 				
 				if (isV4L2Device) {
-					V4L2DeviceParameters outparam(outputFile.c_str(), videoCapture->getFormat(), videoCapture->getWidth(), videoCapture->getHeight(), 0, ioTypeOut);
-					out = V4l2Output::create(outparam);
+				V4L2DeviceParameters outparam(outputFile.c_str(), videoCapture->getFormat(), videoCapture->getWidth(), videoCapture->getHeight(), 0, ioTypeOut);
+				out = V4l2Output::create(outparam);
 					if (out != NULL) {
-						outfd = out->getFd();
-						LOG(INFO) << "Output fd:" << outfd << " " << outputFile;
-					} else {
+					outfd = out->getFd();
+					LOG(INFO) << "Output fd:" << outfd << " " << outputFile;
+				} else {
 						LOG(WARN) << "Cannot open V4L2 output device:" << outputFile;
 					}
 				}

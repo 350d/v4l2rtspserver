@@ -10,7 +10,6 @@
 ** -------------------------------------------------------------------------*/
 
 #include "SnapshotManager.h"
-#include "EnhancedAvcC.h"
 #include "logger.h"
 #include "../libv4l2cpp/inc/V4l2Capture.h"
 #include <string>
@@ -406,20 +405,20 @@ std::vector<uint8_t> SnapshotManager::findNALUnit(const uint8_t* data, size_t si
         if (data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x00 && data[i+3] == 0x01) {
             // Check if this is the NAL type we're looking for
             if (i + 4 < size) {
-                uint8_t currentNalType = data[i+4] & 0x1F;
-                if (currentNalType == nalType) {
+            uint8_t currentNalType = data[i+4] & 0x1F;
+            if (currentNalType == nalType) {
                     // Find the end of this NAL unit
                     size_t j = i + 4;
                     while (j < size - 3) {
-                        if (data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x00 && data[j+3] == 0x01) {
-                            break;
-                        }
-                        j++;
+                    if (data[j] == 0x00 && data[j+1] == 0x00 && data[j+2] == 0x00 && data[j+3] == 0x01) {
+                        break;
                     }
-                    
+                        j++;
+                }
+                
                     // Extract NAL unit data (excluding start code)
                     result.assign(data + i + 4, data + j);
-                    break;
+                break;
                 }
             }
         }
@@ -497,7 +496,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
 
     // Auto-detect dimensions from SPS if available, otherwise use provided dimensions
     std::pair<int, int> detectedDims = {width, height};
-    if (!sps.empty()) {
+        if (!sps.empty()) {
         detectedDims = parseSPSDimensions(sps);
         if (detectedDims.first != width || detectedDims.second != height) {
             LOG(INFO) << "[H264] SPS auto-detected dimensions: " << detectedDims.first << "x" << detectedDims.second 
@@ -871,7 +870,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
 
     // Store as snapshot
     {
-        std::lock_guard<std::mutex> lock(m_snapshotMutex);
+    std::lock_guard<std::mutex> lock(m_snapshotMutex);
         m_snapshotData = mp4Data;
         m_snapshotMimeType = "video/mp4";
         m_lastSnapshotTime = std::time(nullptr);

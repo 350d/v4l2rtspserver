@@ -111,7 +111,6 @@ int main(int argc, char** argv)
 	const char* realm = NULL;
 	std::list<std::string> userPasswordList;
 	std::string webroot;
-	bool enableSnapshots = false;
 	int snapshotWidth = 640;
 	int snapshotHeight = 480;
 	int snapshotSaveInterval = 5; // Default 5 seconds
@@ -131,7 +130,7 @@ int main(int argc, char** argv)
 
 	// decode parameters
 	int c = 0;     
-	while ((c = getopt (argc, argv, "v::Q:O:b:j::J:d::" "I:P:p:m::u:M::ct:S::x:X" "R:U:" "rwBsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
+	while ((c = getopt (argc, argv, "v::Q:O:b:j:J:d:" "I:P:p:m::u:M::ct:S::x:X" "R:U:" "rwBsf::F:W:H:G:" "A:C:a:" "Vh")) != -1)
 	{
 		switch (c)
 		{
@@ -140,10 +139,7 @@ int main(int argc, char** argv)
 			case 'O':	outputFile = optarg; break;
 			case 'b':	webroot = optarg; break;
 			case 'j':	
-				enableSnapshots = true; 
-				if (optarg) {
 					snapshotFilePath = optarg;
-				}
 				break;
 			case 'J':   
 			{
@@ -305,8 +301,8 @@ int main(int argc, char** argv)
 				outList.push_back(out);
 			}
 			
-			// Initialize snapshot manager if enabled
-			if (enableSnapshots && videoReplicator != NULL) {
+			// Initialize snapshot manager (always enabled)
+			if (videoReplicator != NULL) {
 				SnapshotManager::getInstance().setEnabled(true);
 				SnapshotManager::getInstance().setFrameDimensions(width, height);
 				SnapshotManager::getInstance().setSnapshotResolution(snapshotWidth, snapshotHeight);
