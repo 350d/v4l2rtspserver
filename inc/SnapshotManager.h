@@ -44,6 +44,12 @@ public:
     void setFilePath(const std::string& filePath) { m_filePath = filePath; }
     void setSaveInterval(int intervalSeconds);  // Validates range 1-60 seconds
     
+    // Device format information
+    void setDeviceFormat(unsigned int v4l2Format, int width, int height);
+    void setPixelFormat(const std::string& pixelFormat);
+    std::string getPixelFormat() const;
+    unsigned int getV4L2Format() const;
+    
     // Initialization
     bool initialize(int width, int height);
     
@@ -68,6 +74,20 @@ public:
     std::string getModeDescription() const;
     bool hasRecentSnapshot() const;
     
+    // Pixel format conversion helpers
+    std::string v4l2FormatToPixelFormat(unsigned int v4l2Format);
+    std::string v4l2FormatToString(unsigned int v4l2Format);
+
+    // Debug helper functions
+    std::string getNALTypeName(uint8_t nalType);
+    std::string getCurrentTimestamp();
+
+    // Enhanced MP4 creation with debugging
+    std::string createMP4Snapshot(const std::vector<uint8_t>& spsData, 
+                                 const std::vector<uint8_t>& ppsData, 
+                                 const std::vector<uint8_t>& h264Data,
+                                 int width, int height);
+
 private:
     SnapshotManager();
     ~SnapshotManager();
@@ -81,6 +101,9 @@ private:
     void autoSaveSnapshot();
     bool convertYUVToJPEG(const unsigned char* yuvData, size_t dataSize, int width, int height);
     
+    // Dynamic NAL unit extraction (inspired by go2rtc)
+    std::vector<uint8_t> findNALUnit(const uint8_t* data, size_t size, uint8_t nalType);
+    
     // Members
     bool m_enabled;
     SnapshotMode m_mode;
@@ -88,6 +111,11 @@ private:
     int m_height;
     int m_snapshotWidth;
     int m_snapshotHeight;
+    
+    // Device format information
+    unsigned int m_v4l2Format;
+    std::string m_pixelFormat;
+    bool m_formatInitialized;
     
     // Thread safety
     mutable std::mutex m_snapshotMutex;
