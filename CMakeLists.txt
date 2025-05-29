@@ -78,6 +78,7 @@ endif()
 
 # librtsp
 aux_source_directory(src LIBV4L2RTSP_SRC_FILES)
+list(APPEND LIBV4L2RTSP_SRC_FILES src/EnhancedAvcC.cpp)
 add_library (libv4l2rtspserver STATIC ${LIVESOURCE} ${LIBV4L2RTSP_SRC_FILES})	
 target_include_directories(libv4l2rtspserver PUBLIC inc ${LIVEINCLUDE})
 target_compile_definitions(libv4l2rtspserver PUBLIC ${LIVE555CFLAGS})
