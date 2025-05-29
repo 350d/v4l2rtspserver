@@ -10,6 +10,7 @@
 ** -------------------------------------------------------------------------*/
 
 #include <sstream>
+#include <vector>
 
 // live555
 #include <Base64.hh>
@@ -33,6 +34,11 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	size_t size = 0;
 	int frameType = 0;
 	unsigned char* buffer = this->extractFrame(frame, bufSize, size, frameType);
+	
+	// For proper H264 output file writing
+	std::vector<unsigned char> outputBuffer;
+	bool hasKeyFrame = false;
+	
 	while (buffer != NULL)				
 	{	
 		switch (frameType&0x1F)					
@@ -41,6 +47,7 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 			case 8: LOG(INFO) << "PPS size:" << size << " bufSize:" << bufSize; m_pps.assign((char*)buffer,size); break;
 			case 5: 
 				LOG(INFO) << "IDR size:" << size << " bufSize:" << bufSize; 
+				hasKeyFrame = true;
 				// Process H264 keyframe for snapshot if enabled
 				if (SnapshotManager::getInstance().isEnabled()) {
 					// Pass SPS/PPS data along with keyframe for better snapshot creation
@@ -53,10 +60,26 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 					LOG(DEBUG) << "Repeating SPS/PPS before IDR frame (size: " << m_sps.size() << "/" << m_pps.size() << ")";
 					frameList.push_back(std::pair<unsigned char*,size_t>((unsigned char*)m_sps.c_str(), m_sps.size()));
 					frameList.push_back(std::pair<unsigned char*,size_t>((unsigned char*)m_pps.c_str(), m_pps.size()));
+					
+					// Add SPS/PPS to output buffer with start codes
+					if (m_outfd != -1) {
+						// Add start code + SPS
+						outputBuffer.insert(outputBuffer.end(), H264marker, H264marker + 4);
+						outputBuffer.insert(outputBuffer.end(), m_sps.begin(), m_sps.end());
+						// Add start code + PPS  
+						outputBuffer.insert(outputBuffer.end(), H264marker, H264marker + 4);
+						outputBuffer.insert(outputBuffer.end(), m_pps.begin(), m_pps.end());
+					}
 				}
 			break;
 			default: 
 				break;
+		}
+		
+		// Add current NAL unit to output buffer with start code
+		if (m_outfd != -1) {
+			outputBuffer.insert(outputBuffer.end(), H264marker, H264marker + 4);
+			outputBuffer.insert(outputBuffer.end(), buffer, buffer + size);
 		}
 		
 		if (!m_sps.empty() && !m_pps.empty())
@@ -82,6 +105,17 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 		
 		buffer = this->extractFrame(&buffer[size], bufSize, size, frameType);
 	}
+	
+	// Write properly formatted H264 data to output file
+	if (m_outfd != -1 && !outputBuffer.empty()) {
+		int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
+		if (written != (int)outputBuffer.size()) {
+			LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
+		} else if (hasKeyFrame) {
+			LOG(DEBUG) << "H264 keyframe written to output: " << written << " bytes";
+		}
+	}
+	
 	return frameList;
 }
 

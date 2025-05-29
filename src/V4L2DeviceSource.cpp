@@ -249,10 +249,20 @@ void V4L2DeviceSource::postFrame(char * frame, int frameSize, const timeval &ref
 	processFrame(frame,frameSize,ref);
 	if (m_outfd != -1) 
 	{
-		int written = write(m_outfd, frame, frameSize);
-		if (written != frameSize) {
-			LOG(NOTICE) << "error writing output " << written << "/" << frameSize << " err:" << strerror(errno);
+#ifdef __linux__
+		// Skip writing for H264/H265 formats - they have their own proper writing in H26X_V4L2DeviceSource
+		unsigned int format = m_device ? m_device->getVideoFormat() : 0;
+		if (format != V4L2_PIX_FMT_H264 && format != V4L2_PIX_FMT_HEVC) {
+#endif
+			int written = write(m_outfd, frame, frameSize);
+			if (written != frameSize) {
+				LOG(NOTICE) << "error writing output " << written << "/" << frameSize << " err:" << strerror(errno);
+			}
+#ifdef __linux__
+		} else {
+			LOG(DEBUG) << "Skipping raw H264/HEVC write - handled by H26X_V4L2DeviceSource";
 		}
+#endif
 	}		
 }	
 
