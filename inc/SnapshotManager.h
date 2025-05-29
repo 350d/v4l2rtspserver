@@ -107,6 +107,8 @@ public:
     static void dumpStreamStatistics(int total, int i, int p, int b);
     static std::string getDumpDirectory();
 
+    void enableFullDump(const std::string& dumpDir);
+
 private:
     SnapshotManager();
     ~SnapshotManager();
@@ -157,4 +159,7 @@ private:
     std::string m_lastPPS;
     int m_lastFrameWidth;
     int m_lastFrameHeight;
+
+    bool m_fullDumpEnabled = false;
+    std::string m_fullDumpDir;
 };
