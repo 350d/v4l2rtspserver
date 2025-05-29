@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 
 void MP4SnapshotCreator::write32(std::vector<uint8_t>& vec, uint32_t value) {
     vec.push_back((value >> 24) & 0xFF);
@@ -67,70 +68,282 @@ MP4SnapshotCreator::MP4Data MP4SnapshotCreator::createSnapshot(const std::vector
         return result; // success = false
     }
     
-    // SAFARI FIX: Create raw H.264 with start codes, then use system ffmpeg
-    std::vector<uint8_t> rawH264;
+    std::vector<uint8_t> mp4Data;
     
-    // Start code (0x00 0x00 0x00 0x01) + SPS
-    rawH264.push_back(0x00); rawH264.push_back(0x00); 
-    rawH264.push_back(0x00); rawH264.push_back(0x01);
-    rawH264.insert(rawH264.end(), sps.begin(), sps.end());
+    // Create ftyp box (file type)
+    uint32_t ftypSize = 20;
+    write32(mp4Data, ftypSize);
+    mp4Data.insert(mp4Data.end(), {'f', 't', 'y', 'p'}); // box type
+    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', 'm'}); // major brand
+    write32(mp4Data, 512);                               // minor version
+    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', 'm'}); // compatible brand
     
-    // Start code + PPS
-    rawH264.push_back(0x00); rawH264.push_back(0x00); 
-    rawH264.push_back(0x00); rawH264.push_back(0x01);
-    rawH264.insert(rawH264.end(), pps.begin(), pps.end());
+    // Create mdat box (media data) - placeholder, will update size later
+    size_t mdatSizePos = mp4Data.size();
+    write32(mp4Data, 0); // placeholder for size
+    mp4Data.insert(mp4Data.end(), {'m', 'd', 'a', 't'});
     
-    // Start code + IDR frame
-    rawH264.push_back(0x00); rawH264.push_back(0x00); 
-    rawH264.push_back(0x00); rawH264.push_back(0x01);
-    rawH264.insert(rawH264.end(), h264Frame.begin(), h264Frame.end());
+    size_t mdatDataStart = mp4Data.size();
     
-    // Write temporary raw H.264 file
-    std::string tempH264 = "/tmp/snapshot_" + std::to_string(time(nullptr)) + ".h264";
-    std::string tempMP4 = "/tmp/snapshot_" + std::to_string(time(nullptr)) + ".mp4";
+    // Add H.264 data with length prefixes (MP4 format)
+    // Convert Annex B start codes to length prefixes
     
-    std::ofstream h264File(tempH264, std::ios::binary);
-    if (!h264File.is_open()) {
-        return result; // success = false
-    }
+    // SPS with length prefix
+    write32(mp4Data, sps.size());
+    mp4Data.insert(mp4Data.end(), sps.begin(), sps.end());
     
-    h264File.write(reinterpret_cast<const char*>(rawH264.data()), rawH264.size());
-    h264File.close();
+    // PPS with length prefix
+    write32(mp4Data, pps.size());
+    mp4Data.insert(mp4Data.end(), pps.begin(), pps.end());
     
-    // Convert to MP4 using system ffmpeg
-    std::string ffmpegCmd = "ffmpeg -f h264 -i " + tempH264 + 
-                           " -c copy -movflags +faststart -f mp4 " + tempMP4 + 
-                           " -y 2>/dev/null";
+    // IDR frame with length prefix
+    write32(mp4Data, h264Frame.size());
+    mp4Data.insert(mp4Data.end(), h264Frame.begin(), h264Frame.end());
     
-    int ret = system(ffmpegCmd.c_str());
+    // Update mdat size
+    uint32_t mdatSize = mp4Data.size() - mdatSizePos;
+    mp4Data[mdatSizePos] = (mdatSize >> 24) & 0xFF;
+    mp4Data[mdatSizePos + 1] = (mdatSize >> 16) & 0xFF;
+    mp4Data[mdatSizePos + 2] = (mdatSize >> 8) & 0xFF;
+    mp4Data[mdatSizePos + 3] = mdatSize & 0xFF;
     
-    // Clean up temporary H.264 file
-    remove(tempH264.c_str());
+    // Create moov box (movie metadata)
+    std::vector<uint8_t> moovBox;
     
-    if (ret != 0) {
-        return result; // success = false
-    }
+    // Create mvhd box (movie header)
+    std::vector<uint8_t> mvhdBox;
+    write32(mvhdBox, 108); // box size
+    mvhdBox.insert(mvhdBox.end(), {'m', 'v', 'h', 'd'});
+    write8(mvhdBox, 0);   // version
+    write8(mvhdBox, 0); write8(mvhdBox, 0); write8(mvhdBox, 0); // flags
+    write32(mvhdBox, 0);  // creation time
+    write32(mvhdBox, 0);  // modification time
+    write32(mvhdBox, 1000); // timescale
+    write32(mvhdBox, 1000); // duration
+    write32(mvhdBox, 0x00010000); // rate
+    write16(mvhdBox, 0x0100);     // volume
+    write16(mvhdBox, 0);          // reserved
+    write32(mvhdBox, 0); write32(mvhdBox, 0); // reserved
+    // Matrix (identity)
+    write32(mvhdBox, 0x00010000); write32(mvhdBox, 0); write32(mvhdBox, 0);
+    write32(mvhdBox, 0); write32(mvhdBox, 0x00010000); write32(mvhdBox, 0);
+    write32(mvhdBox, 0); write32(mvhdBox, 0); write32(mvhdBox, 0x40000000);
+    // Predefined
+    for (int i = 0; i < 6; i++) write32(mvhdBox, 0);
+    write32(mvhdBox, 2); // next track ID
     
-    // Read generated MP4 file
-    std::ifstream mp4File(tempMP4, std::ios::binary);
-    if (!mp4File.is_open()) {
-        return result; // success = false
-    }
+    // Create trak box (track)
+    std::vector<uint8_t> trakBox;
     
-    result.data = std::vector<uint8_t>((std::istreambuf_iterator<char>(mp4File)),
-                                       std::istreambuf_iterator<char>());
-    mp4File.close();
+    // Create tkhd box (track header)
+    std::vector<uint8_t> tkhdBox;
+    write32(tkhdBox, 92); // box size
+    tkhdBox.insert(tkhdBox.end(), {'t', 'k', 'h', 'd'});
+    write8(tkhdBox, 0);   // version
+    write8(tkhdBox, 0); write8(tkhdBox, 0); write8(tkhdBox, 7); // flags (enabled, in movie, in preview)
+    write32(tkhdBox, 0);  // creation time
+    write32(tkhdBox, 0);  // modification time
+    write32(tkhdBox, 1);  // track ID
+    write32(tkhdBox, 0);  // reserved
+    write32(tkhdBox, 1000); // duration
+    write32(tkhdBox, 0); write32(tkhdBox, 0); // reserved
+    write16(tkhdBox, 0);  // layer
+    write16(tkhdBox, 0);  // alternate group
+    write16(tkhdBox, 0);  // volume
+    write16(tkhdBox, 0);  // reserved
+    // Matrix (identity)
+    write32(tkhdBox, 0x00010000); write32(tkhdBox, 0); write32(tkhdBox, 0);
+    write32(tkhdBox, 0); write32(tkhdBox, 0x00010000); write32(tkhdBox, 0);
+    write32(tkhdBox, 0); write32(tkhdBox, 0); write32(tkhdBox, 0x40000000);
+    write32(tkhdBox, width << 16);  // width
+    write32(tkhdBox, height << 16); // height
     
-    // Clean up temporary MP4 file
-    remove(tempMP4.c_str());
+    // Create mdia box (media)
+    std::vector<uint8_t> mdiaBox;
     
-    if (result.data.empty()) {
-        return result; // success = false
-    }
+    // Create mdhd box (media header)
+    std::vector<uint8_t> mdhdBox;
+    write32(mdhdBox, 32); // box size
+    mdhdBox.insert(mdhdBox.end(), {'m', 'd', 'h', 'd'});
+    write8(mdhdBox, 0);   // version
+    write8(mdhdBox, 0); write8(mdhdBox, 0); write8(mdhdBox, 0); // flags
+    write32(mdhdBox, 0);  // creation time
+    write32(mdhdBox, 0);  // modification time
+    write32(mdhdBox, 1000); // timescale
+    write32(mdhdBox, 1000); // duration
+    write16(mdhdBox, 0x55c4); // language (und)
+    write16(mdhdBox, 0);      // predefined
     
-    // Generate proper MIME type with codec string
-    std::string codecString = generateCodecString(sps);
-    result.mimeType = "video/mp4; codecs=\"" + codecString + "\"";
+    // Create hdlr box (handler)
+    std::vector<uint8_t> hdlrBox;
+    write32(hdlrBox, 45); // box size
+    hdlrBox.insert(hdlrBox.end(), {'h', 'd', 'l', 'r'});
+    write8(hdlrBox, 0);   // version
+    write8(hdlrBox, 0); write8(hdlrBox, 0); write8(hdlrBox, 0); // flags
+    write32(hdlrBox, 0);  // predefined
+    hdlrBox.insert(hdlrBox.end(), {'v', 'i', 'd', 'e'}); // handler type
+    write32(hdlrBox, 0); write32(hdlrBox, 0); write32(hdlrBox, 0); // reserved
+    hdlrBox.insert(hdlrBox.end(), {'V', 'i', 'd', 'e', 'o', 'H', 'a', 'n', 'd', 'l', 'e', 'r', 0}); // name
+    
+    // Create minf box (media information)
+    std::vector<uint8_t> minfBox;
+    
+    // Create vmhd box (video media header)
+    std::vector<uint8_t> vmhdBox;
+    write32(vmhdBox, 20); // box size
+    vmhdBox.insert(vmhdBox.end(), {'v', 'm', 'h', 'd'});
+    write8(vmhdBox, 0);   // version
+    write8(vmhdBox, 0); write8(vmhdBox, 0); write8(vmhdBox, 1); // flags
+    write16(vmhdBox, 0);  // graphics mode
+    write16(vmhdBox, 0); write16(vmhdBox, 0); write16(vmhdBox, 0); // opcolor
+    
+    // Create dinf box (data information)
+    std::vector<uint8_t> dinfBox;
+    write32(dinfBox, 36); // box size
+    dinfBox.insert(dinfBox.end(), {'d', 'i', 'n', 'f'});
+    
+    // Create dref box (data reference)
+    write32(dinfBox, 28); // box size
+    dinfBox.insert(dinfBox.end(), {'d', 'r', 'e', 'f'});
+    write8(dinfBox, 0);   // version
+    write8(dinfBox, 0); write8(dinfBox, 0); write8(dinfBox, 0); // flags
+    write32(dinfBox, 1);  // entry count
+    
+    // Create url box
+    write32(dinfBox, 12); // box size
+    dinfBox.insert(dinfBox.end(), {'u', 'r', 'l', ' '});
+    write8(dinfBox, 0);   // version
+    write8(dinfBox, 0); write8(dinfBox, 0); write8(dinfBox, 1); // flags (self-contained)
+    
+    // Create stbl box (sample table)
+    std::vector<uint8_t> stblBox;
+    
+    // Create stsd box (sample description)
+    std::vector<uint8_t> stsdBox;
+    write32(stsdBox, 16 + 86); // box size (will be updated)
+    stsdBox.insert(stsdBox.end(), {'s', 't', 's', 'd'});
+    write8(stsdBox, 0);   // version
+    write8(stsdBox, 0); write8(stsdBox, 0); write8(stsdBox, 0); // flags
+    write32(stsdBox, 1);  // entry count
+    
+    // Create avc1 box (AVC sample entry)
+    write32(stsdBox, 86); // box size
+    stsdBox.insert(stsdBox.end(), {'a', 'v', 'c', '1'});
+    for (int i = 0; i < 6; i++) write8(stsdBox, 0); // reserved
+    write16(stsdBox, 1);  // data reference index
+    write16(stsdBox, 0);  // predefined
+    write16(stsdBox, 0);  // reserved
+    for (int i = 0; i < 3; i++) write32(stsdBox, 0); // predefined
+    write16(stsdBox, width);  // width
+    write16(stsdBox, height); // height
+    write32(stsdBox, 0x00480000); // horizontal resolution 72 dpi
+    write32(stsdBox, 0x00480000); // vertical resolution 72 dpi
+    write32(stsdBox, 0);  // reserved
+    write16(stsdBox, 1);  // frame count
+    for (int i = 0; i < 32; i++) write8(stsdBox, 0); // compressor name
+    write16(stsdBox, 24); // depth
+    write16(stsdBox, 0xFFFF); // predefined
+    
+    // Create avcC box
+    auto avcCData = createAvcCBox(sps, pps);
+    write32(stsdBox, 8 + avcCData.size()); // avcC box size
+    stsdBox.insert(stsdBox.end(), {'a', 'v', 'c', 'C'});
+    stsdBox.insert(stsdBox.end(), avcCData.begin(), avcCData.end());
+    
+    // Update stsd size
+    uint32_t stsdSize = stsdBox.size();
+    stsdBox[0] = (stsdSize >> 24) & 0xFF;
+    stsdBox[1] = (stsdSize >> 16) & 0xFF;
+    stsdBox[2] = (stsdSize >> 8) & 0xFF;
+    stsdBox[3] = stsdSize & 0xFF;
+    
+    // Create stts box (time to sample)
+    std::vector<uint8_t> sttsBox;
+    write32(sttsBox, 24); // box size
+    sttsBox.insert(sttsBox.end(), {'s', 't', 't', 's'});
+    write8(sttsBox, 0);   // version
+    write8(sttsBox, 0); write8(sttsBox, 0); write8(sttsBox, 0); // flags
+    write32(sttsBox, 1);  // entry count
+    write32(sttsBox, 1);  // sample count
+    write32(sttsBox, 1000); // sample duration
+    
+    // Create stsc box (sample to chunk)
+    std::vector<uint8_t> stscBox;
+    write32(stscBox, 28); // box size
+    stscBox.insert(stscBox.end(), {'s', 't', 's', 'c'});
+    write8(stscBox, 0);   // version
+    write8(stscBox, 0); write8(stscBox, 0); write8(stscBox, 0); // flags
+    write32(stscBox, 1);  // entry count
+    write32(stscBox, 1);  // first chunk
+    write32(stscBox, 3);  // samples per chunk (SPS + PPS + IDR)
+    write32(stscBox, 1);  // sample description index
+    
+    // Create stsz box (sample sizes)
+    std::vector<uint8_t> stszBox;
+    write32(stszBox, 32); // box size
+    stszBox.insert(stszBox.end(), {'s', 't', 's', 'z'});
+    write8(stszBox, 0);   // version
+    write8(stszBox, 0); write8(stszBox, 0); write8(stszBox, 0); // flags
+    write32(stszBox, 0);  // sample size (0 = variable)
+    write32(stszBox, 3);  // sample count
+    write32(stszBox, sps.size() + 4);      // SPS size + length prefix
+    write32(stszBox, pps.size() + 4);      // PPS size + length prefix
+    write32(stszBox, h264Frame.size() + 4); // IDR size + length prefix
+    
+    // Create stco box (chunk offsets)
+    std::vector<uint8_t> stcoBox;
+    write32(stcoBox, 20); // box size
+    stcoBox.insert(stcoBox.end(), {'s', 't', 'c', 'o'});
+    write8(stcoBox, 0);   // version
+    write8(stcoBox, 0); write8(stcoBox, 0); write8(stcoBox, 0); // flags
+    write32(stcoBox, 1);  // entry count
+    write32(stcoBox, mdatDataStart); // chunk offset
+    
+    // Assemble stbl box
+    uint32_t stblSize = 8 + stsdBox.size() + sttsBox.size() + stscBox.size() + stszBox.size() + stcoBox.size();
+    write32(stblBox, stblSize);
+    stblBox.insert(stblBox.end(), {'s', 't', 'b', 'l'});
+    stblBox.insert(stblBox.end(), stsdBox.begin(), stsdBox.end());
+    stblBox.insert(stblBox.end(), sttsBox.begin(), sttsBox.end());
+    stblBox.insert(stblBox.end(), stscBox.begin(), stscBox.end());
+    stblBox.insert(stblBox.end(), stszBox.begin(), stszBox.end());
+    stblBox.insert(stblBox.end(), stcoBox.begin(), stcoBox.end());
+    
+    // Assemble minf box
+    uint32_t minfSize = 8 + vmhdBox.size() + dinfBox.size() + stblBox.size();
+    write32(minfBox, minfSize);
+    minfBox.insert(minfBox.end(), {'m', 'i', 'n', 'f'});
+    minfBox.insert(minfBox.end(), vmhdBox.begin(), vmhdBox.end());
+    minfBox.insert(minfBox.end(), dinfBox.begin(), dinfBox.end());
+    minfBox.insert(minfBox.end(), stblBox.begin(), stblBox.end());
+    
+    // Assemble mdia box
+    uint32_t mdiaSize = 8 + mdhdBox.size() + hdlrBox.size() + minfBox.size();
+    write32(mdiaBox, mdiaSize);
+    mdiaBox.insert(mdiaBox.end(), {'m', 'd', 'i', 'a'});
+    mdiaBox.insert(mdiaBox.end(), mdhdBox.begin(), mdhdBox.end());
+    mdiaBox.insert(mdiaBox.end(), hdlrBox.begin(), hdlrBox.end());
+    mdiaBox.insert(mdiaBox.end(), minfBox.begin(), minfBox.end());
+    
+    // Assemble trak box
+    uint32_t trakSize = 8 + tkhdBox.size() + mdiaBox.size();
+    write32(trakBox, trakSize);
+    trakBox.insert(trakBox.end(), {'t', 'r', 'a', 'k'});
+    trakBox.insert(trakBox.end(), tkhdBox.begin(), tkhdBox.end());
+    trakBox.insert(trakBox.end(), mdiaBox.begin(), mdiaBox.end());
+    
+    // Assemble moov box
+    uint32_t moovSize = 8 + mvhdBox.size() + trakBox.size();
+    write32(moovBox, moovSize);
+    moovBox.insert(moovBox.end(), {'m', 'o', 'o', 'v'});
+    moovBox.insert(moovBox.end(), mvhdBox.begin(), mvhdBox.end());
+    moovBox.insert(moovBox.end(), trakBox.begin(), trakBox.end());
+    
+    // Add moov box to MP4 data
+    mp4Data.insert(mp4Data.end(), moovBox.begin(), moovBox.end());
+    
+    result.data = mp4Data;
+    result.mimeType = "video/mp4; codecs=\"" + generateCodecString(sps) + "\"";
     result.success = true;
     
     return result;
