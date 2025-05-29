@@ -26,6 +26,7 @@
 #include <iomanip>
 #include <sstream>
 #include <ctime>
+#include "MP4SnapshotCreator.h"
 
 #ifdef __linux__
 #include <linux/videodev2.h>
@@ -33,6 +34,7 @@
 
 //#define DEBUG_DUMP_H264_DATA
 
+#ifdef DEBUG_DUMP_H264_DATA
 // ENHANCED FULL DATA DUMPER CLASS
 class FullDataDumper {
 private:
@@ -54,7 +56,7 @@ public:
         int result = system(cmd.c_str());
         (void)result; // Suppress unused result warning
         
-        LOG(NOTICE) << "🎬 Full data dumper initialized: " << dumpDir;
+        LOG(NOTICE) << "[DUMP] Full data dumper initialized: " << dumpDir;
         initialized = true;
     }
     
@@ -70,7 +72,7 @@ public:
         std::string cmd = "mkdir -p " + dumpDir;
         int result = system(cmd.c_str());
         (void)result;
-        LOG(NOTICE) << "🎬 Full data dumper directory set: " << dumpDir;
+        LOG(NOTICE) << "[DUMP] Full data dumper directory set: " << dumpDir;
         initialized = true;
     }
     
@@ -133,7 +135,7 @@ public:
 #endif
         
         file.close();
-        LOG(NOTICE) << "📱 V4L2 device info dumped: " << infoFile;
+        LOG(NOTICE) << "[V4L2] Device info dumped: " << infoFile;
     }
     
     // Dump system information
@@ -184,7 +186,7 @@ public:
         }
         
         file.close();
-        LOG(NOTICE) << "🖥️  System info dumped: " << infoFile;
+        LOG(NOTICE) << "[SYS] System info dumped: " << infoFile;
     }
     
     // Dump H.264 stream data with full analysis
@@ -277,7 +279,7 @@ public:
         
         analysis.close();
         
-        LOG(NOTICE) << "🎬 Frame " << frameNumber << " data dumped to: " << prefix << "_*";
+        LOG(NOTICE) << "[H264] Frame " << frameNumber << " data dumped to: " << prefix << "_*";
     }
     
     std::string getDumpDir() const { return dumpDir; }
@@ -285,6 +287,7 @@ public:
 
 // Static instance
 FullDataDumper* FullDataDumper::instance = nullptr;
+#endif
 
 SnapshotManager::SnapshotManager() 
     : m_enabled(false), m_mode(SnapshotMode::DISABLED), 
@@ -433,140 +436,61 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         return;
     }
 
-    // Prepare MP4 boxes
-    std::vector<uint8_t> mp4Data;
-
-    // ftyp box
-    const uint8_t ftypBox[] = {
-        0x00, 0x00, 0x00, 0x20,             // box size
-        0x66, 0x74, 0x79, 0x70,             // 'ftyp'
-        0x69, 0x73, 0x6F, 0x6D,             // major_brand: 'isom'
-        0x00, 0x00, 0x02, 0x00,             // minor_version: 0x200
-        0x69, 0x73, 0x6F, 0x6D,             // compatible_brands: 'isom'
-        0x69, 0x73, 0x6F, 0x32,             // 'iso2'
-        0x61, 0x76, 0x63, 0x31,             // 'avc1'
-        0x6D, 0x70, 0x34, 0x31              // 'mp41'
-    };
-    mp4Data.insert(mp4Data.end(), ftypBox, ftypBox + sizeof(ftypBox));
-
-    // mdat box - contains NAL units with start codes
-    std::vector<uint8_t> mdatData;
-    const uint8_t startCode[] = {0x00, 0x00, 0x00, 0x01};
-
-    // Add SPS
-    if (!sps.empty()) {
-        mdatData.insert(mdatData.end(), startCode, startCode + 4);
-        mdatData.insert(mdatData.end(), sps.begin(), sps.end());
+    // Convert strings to vectors for MP4SnapshotCreator
+    std::vector<uint8_t> spsVec(sps.begin(), sps.end());
+    std::vector<uint8_t> ppsVec(pps.begin(), pps.end());
+    std::vector<uint8_t> h264Vec(h264Data, h264Data + h264Size);
+    
+    // Use fallback SPS/PPS if empty
+    if (spsVec.empty() && !m_lastSPS.empty()) {
+        spsVec.assign(m_lastSPS.begin(), m_lastSPS.end());
     }
-
-    // Add PPS
-    if (!pps.empty()) {
-        mdatData.insert(mdatData.end(), startCode, startCode + 4);
-        mdatData.insert(mdatData.end(), pps.begin(), pps.end());
+    if (ppsVec.empty() && !m_lastPPS.empty()) {
+        ppsVec.assign(m_lastPPS.begin(), m_lastPPS.end());
     }
-
-    // Add H264 frame
-    mdatData.insert(mdatData.end(), startCode, startCode + 4);
-    mdatData.insert(mdatData.end(), h264Data, h264Data + h264Size);
-
-    // mdat box header
-    uint32_t mdatSize = mdatData.size() + 8;  // data size + box header
-    mp4Data.push_back((mdatSize >> 24) & 0xFF);
-    mp4Data.push_back((mdatSize >> 16) & 0xFF);
-    mp4Data.push_back((mdatSize >> 8) & 0xFF);
-    mp4Data.push_back(mdatSize & 0xFF);
-    mp4Data.push_back('m');
-    mp4Data.push_back('d');
-    mp4Data.push_back('a');
-    mp4Data.push_back('t');
-    mp4Data.insert(mp4Data.end(), mdatData.begin(), mdatData.end());
-
-    // moov box - contains video metadata
-    std::vector<uint8_t> moovBox;
-    // mvhd
-    const uint8_t mvhdBox[] = {
-        0x00, 0x00, 0x00, 0x6C,             // box size
-        0x6D, 0x76, 0x68, 0x64,             // 'mvhd'
-        0x00, 0x00, 0x00, 0x00,             // version/flags
-        0x00, 0x00, 0x00, 0x00,             // creation_time
-        0x00, 0x00, 0x00, 0x00,             // modification_time
-        0x00, 0x00, 0x03, 0xE8,             // timescale = 1000
-        0x00, 0x00, 0x00, 0x01,             // duration = 1 sec
-    };
-    moovBox.insert(moovBox.end(), mvhdBox, mvhdBox + sizeof(mvhdBox));
-
-    // Add matrix and other mvhd fields
-    const uint8_t mvhdMatrix[] = {
-        0x00, 0x01, 0x00, 0x00,             // rate = 1.0
-        0x01, 0x00,                         // volume = 1.0
-        0x00, 0x00,                         // reserved
-        0x00, 0x00, 0x00, 0x00,             // reserved
-        0x00, 0x01, 0x00, 0x00,             // matrix[0]
-        0x00, 0x00, 0x00, 0x00,             // matrix[1]
-        0x00, 0x00, 0x00, 0x00,             // matrix[2]
-        0x00, 0x00, 0x00, 0x00,             // matrix[3]
-        0x00, 0x01, 0x00, 0x00,             // matrix[4]
-        0x00, 0x00, 0x00, 0x00,             // matrix[5]
-        0x00, 0x00, 0x00, 0x00,             // matrix[6]
-        0x00, 0x00, 0x00, 0x00,             // matrix[7]
-        0x40, 0x00, 0x00, 0x00,             // matrix[8]
-        0x00, 0x00, 0x00, 0x00,             // pre_defined
-        0x00, 0x00, 0x00, 0x00,             // pre_defined
-        0x00, 0x00, 0x00, 0x00,             // pre_defined
-        0x00, 0x00, 0x00, 0x00,             // pre_defined
-        0x00, 0x00, 0x00, 0x00,             // pre_defined
-        0x00, 0x00, 0x00, 0x00,             // pre_defined
-        0x00, 0x00, 0x00, 0x02              // next_track_ID
-    };
-    moovBox.insert(moovBox.end(), mvhdMatrix, mvhdMatrix + sizeof(mvhdMatrix));
-
-    // trak box
-    const uint8_t trakBox[] = {
-        0x00, 0x00, 0x00, 0x5C,             // box size
-        0x74, 0x72, 0x61, 0x6B,             // 'trak'
-        // tkhd box
-        0x00, 0x00, 0x00, 0x54,             // box size
-        0x74, 0x6B, 0x68, 0x64,             // 'tkhd'
-        0x00, 0x00, 0x00, 0x0F,             // version=0, flags=0xF
-        0x00, 0x00, 0x00, 0x00,             // creation_time
-        0x00, 0x00, 0x00, 0x00,             // modification_time
-        0x00, 0x00, 0x00, 0x01,             // track_ID
-        0x00, 0x00, 0x00, 0x00,             // reserved
-        0x00, 0x00, 0x00, 0x01,             // duration
-    };
-    moovBox.insert(moovBox.end(), trakBox, trakBox + sizeof(trakBox));
-
-    // Add video dimensions
-    uint16_t w = width;
-    uint16_t h = height;
-    moovBox.push_back((w >> 8) & 0xFF);
-    moovBox.push_back(w & 0xFF);
-    moovBox.push_back(0x00);
-    moovBox.push_back(0x00);
-    moovBox.push_back((h >> 8) & 0xFF);
-    moovBox.push_back(h & 0xFF);
-
-    // Add moov box to MP4 data
-    uint32_t moovSize = moovBox.size() + 8;
-    mp4Data.push_back((moovSize >> 24) & 0xFF);
-    mp4Data.push_back((moovSize >> 16) & 0xFF);
-    mp4Data.push_back((moovSize >> 8) & 0xFF);
-    mp4Data.push_back(moovSize & 0xFF);
-    mp4Data.push_back('m');
-    mp4Data.push_back('o');
-    mp4Data.push_back('o');
-    mp4Data.push_back('v');
-    mp4Data.insert(mp4Data.end(), moovBox.begin(), moovBox.end());
-
-    // Store as snapshot
-    {
-        std::lock_guard<std::mutex> lock(m_snapshotMutex);
-        m_snapshotData = mp4Data;
-        m_snapshotMimeType = "video/mp4";
-        m_lastSnapshotTime = std::time(nullptr);
-        m_lastSnapshotTimePoint = std::chrono::steady_clock::now();
-        
-        LOG(INFO) << "H264 snapshot created: " << mp4Data.size() << " bytes";
+    
+    // Universal fallback if still empty
+    if (spsVec.empty()) {
+        const uint8_t fallbackSPS[] = {0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78, 0x02, 0x27, 0xe5, 0x9a, 0x80, 0x80, 0x80, 0xa0};
+        spsVec.assign(std::begin(fallbackSPS), std::end(fallbackSPS));
+    }
+    if (ppsVec.empty()) {
+        const uint8_t fallbackPPS[] = {0x28, 0xee, 0x02, 0x5c, 0xb0};
+        ppsVec.assign(std::begin(fallbackPPS), std::end(fallbackPPS));
+    }
+    
+    // Set reasonable dimensions if not provided
+    if (width <= 0) width = 1920;
+    if (height <= 0) height = 1080;
+    
+    // Create MP4 snapshot using our working algorithm
+    auto result = MP4SnapshotCreator::createSnapshot(spsVec, ppsVec, h264Vec, width, height);
+    
+    if (result.success) {
+        // Store as snapshot
+        {
+            std::lock_guard<std::mutex> lock(m_snapshotMutex);
+            m_snapshotData = std::move(result.data);
+            m_snapshotMimeType = result.mimeType;
+            m_lastSnapshotTime = std::time(nullptr);
+            m_lastSnapshotTimePoint = std::chrono::steady_clock::now();
+            
+            // Cache the frame data and SPS/PPS for future use
+            m_lastH264Frame.assign(h264Data, h264Data + h264Size);
+            if (!sps.empty()) m_lastSPS = sps;
+            if (!pps.empty()) m_lastPPS = pps;
+            m_lastFrameWidth = width;
+            m_lastFrameHeight = height;
+            
+            LOG(INFO) << "[H264] Enhanced MP4 snapshot created: " << m_snapshotData.size() << " bytes";
+            LOG(INFO) << "   MIME type: " << m_snapshotMimeType;
+            LOG(INFO) << "   Dimensions: " << width << "x" << height;
+            
+            // Perform debug dump if enabled
+            debugDumpH264Data(spsVec, ppsVec, h264Vec, width, height);
+        }
+    } else {
+        LOG(ERROR) << "Failed to create MP4 snapshot";
     }
 }
 
@@ -779,21 +703,29 @@ bool SnapshotManager::saveSnapshotToFile(const std::string& filePath) {
 bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t dataSize, int width, int height) {
     // Enhanced YUV to JPEG conversion with proper JPEG encoding
     
+    LOG(DEBUG) << "[YUV2JPEG] Starting conversion - input: " << dataSize << " bytes, " << width << "x" << height;
+    
     if (!yuvData || dataSize == 0 || width <= 0 || height <= 0) {
+        LOG(ERROR) << "[YUV2JPEG] Invalid input parameters";
         return false;
     }
     
     // Calculate expected data size for YUYV format (2 bytes per pixel)
     size_t expectedSize = width * height * 2;
     if (dataSize < expectedSize) {
-        LOG(DEBUG) << "YUV data too small: " << dataSize << " expected: " << expectedSize;
+        LOG(DEBUG) << "[YUV2JPEG] YUV data too small: " << dataSize << " expected: " << expectedSize;
         return false;
     }
+    
+    LOG(DEBUG) << "[YUV2JPEG] Data size validation passed";
     
     try {
         // Convert YUYV to RGB first with improved color conversion
         std::vector<unsigned char> rgbData;
         rgbData.reserve(width * height * 3);
+        
+        LOG(DEBUG) << "[YUV2JPEG] Converting YUYV to RGB...";
+        int pixelsProcessed = 0;
         
         for (int i = 0; i < width * height * 2; i += 4) {
             if (i + 3 < dataSize) {
@@ -824,12 +756,23 @@ bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t data
                     rgbData.push_back(static_cast<unsigned char>(r));
                     rgbData.push_back(static_cast<unsigned char>(g));
                     rgbData.push_back(static_cast<unsigned char>(b));
+                    pixelsProcessed++;
                 }
             }
         }
         
+        LOG(DEBUG) << "[YUV2JPEG] RGB conversion completed: " << rgbData.size() << " bytes, " << pixelsProcessed << " pixels";
+        
+        // Log some sample RGB values for debugging
+        if (rgbData.size() >= 6) {
+            LOG(DEBUG) << "[YUV2JPEG] Sample RGB values: R=" << (int)rgbData[0] 
+                       << " G=" << (int)rgbData[1] << " B=" << (int)rgbData[2];
+        }
+        
         // Create a proper JPEG structure (simplified but valid)
         std::vector<unsigned char> jpegData;
+        
+        LOG(DEBUG) << "[YUV2JPEG] Creating JPEG structure...";
         
         // JPEG SOI marker (Start of Image)
         jpegData.push_back(0xFF);
@@ -927,6 +870,8 @@ bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t data
         // This creates a valid but large JPEG file
         // In a real implementation, you'd use DCT and Huffman encoding
         
+        LOG(DEBUG) << "[YUV2JPEG] Adding RGB data to JPEG structure...";
+        
         // Add RGB data (simplified encoding - not optimal but valid)
         for (size_t i = 0; i < rgbData.size(); i += 3) {
             if (i + 2 < rgbData.size()) {
@@ -940,6 +885,8 @@ bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t data
         // EOI marker (End of Image)
         jpegData.push_back(0xFF);
         jpegData.push_back(0xD9);
+        
+        LOG(DEBUG) << "[YUV2JPEG] JPEG structure completed: " << jpegData.size() << " bytes";
         
         // Store as snapshot
         {
@@ -956,7 +903,7 @@ bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t data
             }
         }
         
-        LOG(DEBUG) << "YUV->JPEG conversion successful: " << jpegData.size() << " bytes (" 
+        LOG(DEBUG) << "[YUV2JPEG] YUV->JPEG conversion successful: " << jpegData.size() << " bytes (" 
                    << width << "x" << height << ")";
         
         // Auto-save if file path is specified
@@ -965,7 +912,7 @@ bool SnapshotManager::convertYUVToJPEG(const unsigned char* yuvData, size_t data
         return true;
         
     } catch (const std::exception& e) {
-        LOG(ERROR) << "YUV->JPEG conversion failed: " << e.what();
+        LOG(ERROR) << "[YUV2JPEG] YUV->JPEG conversion failed: " << e.what();
         return false;
     }
 }
@@ -1042,135 +989,6 @@ std::string SnapshotManager::v4l2FormatToString(unsigned int v4l2Format) {
     return std::string(fourcc);
 }
 
-std::string SnapshotManager::createMP4Snapshot(const std::vector<uint8_t>& spsData, 
-                                               const std::vector<uint8_t>& ppsData, 
-                                               const std::vector<uint8_t>& h264Data,
-                                               int width, int height) {
-    LOG(INFO) << "🎬 Creating MP4 snapshot with enhanced debugging";
-    LOG(INFO) << "📊 Input data sizes - SPS: " << spsData.size() 
-              << ", PPS: " << ppsData.size() 
-              << ", H264: " << h264Data.size();
-    LOG(INFO) << "📺 Frame dimensions: " << width << "x" << height;
-    LOG(INFO) << "🎨 Device pixel format: " << m_pixelFormat;
-    LOG(INFO) << "🔧 V4L2 format: 0x" << std::hex << m_v4l2Format << std::dec 
-              << " (" << v4l2FormatToString(m_v4l2Format) << ")";
-
-    // Create dump files for debugging
-    static int dumpCounter = 0;
-    dumpCounter++;
-    
-    std::string dumpPrefix = "tmp/debug_dump_" + std::to_string(dumpCounter);
-    
-    // Dump SPS data
-    if (!spsData.empty()) {
-        std::string spsFile = dumpPrefix + "_sps.bin";
-        std::ofstream spsOut(spsFile, std::ios::binary);
-        if (spsOut.is_open()) {
-            spsOut.write(reinterpret_cast<const char*>(spsData.data()), spsData.size());
-            spsOut.close();
-            LOG(INFO) << "💾 SPS dumped to: " << spsFile;
-            
-            // Log SPS hex data
-            std::stringstream spsHex;
-            for (size_t i = 0; i < std::min((size_t)32, spsData.size()); i++) {
-                spsHex << std::hex << std::setfill('0') << std::setw(2) 
-                       << (int)spsData[i] << " ";
-            }
-            LOG(INFO) << "🔍 SPS data (first 32 bytes): " << spsHex.str();
-        }
-    }
-    
-    // Dump PPS data
-    if (!ppsData.empty()) {
-        std::string ppsFile = dumpPrefix + "_pps.bin";
-        std::ofstream ppsOut(ppsFile, std::ios::binary);
-        if (ppsOut.is_open()) {
-            ppsOut.write(reinterpret_cast<const char*>(ppsData.data()), ppsData.size());
-            ppsOut.close();
-            LOG(INFO) << "💾 PPS dumped to: " << ppsFile;
-            
-            // Log PPS hex data
-            std::stringstream ppsHex;
-            for (size_t i = 0; i < std::min((size_t)16, ppsData.size()); i++) {
-                ppsHex << std::hex << std::setfill('0') << std::setw(2) 
-                       << (int)ppsData[i] << " ";
-            }
-            LOG(INFO) << "🔍 PPS data: " << ppsHex.str();
-        }
-    }
-    
-    // Dump H264 frame data
-    if (!h264Data.empty()) {
-        std::string h264File = dumpPrefix + "_h264_frame.bin";
-        std::ofstream h264Out(h264File, std::ios::binary);
-        if (h264Out.is_open()) {
-            h264Out.write(reinterpret_cast<const char*>(h264Data.data()), h264Data.size());
-            h264Out.close();
-            LOG(INFO) << "💾 H264 frame dumped to: " << h264File;
-            
-            // Log H264 frame start
-            std::stringstream h264Hex;
-            for (size_t i = 0; i < std::min((size_t)32, h264Data.size()); i++) {
-                h264Hex << std::hex << std::setfill('0') << std::setw(2) 
-                        << (int)h264Data[i] << " ";
-            }
-            LOG(INFO) << "🔍 H264 frame start: " << h264Hex.str();
-            
-            // Analyze NAL unit type
-            if (h264Data.size() >= 4) {
-                // Look for start codes and NAL units
-                for (size_t i = 0; i < h264Data.size() - 4; i++) {
-                    if (h264Data[i] == 0x00 && h264Data[i+1] == 0x00 && 
-                        h264Data[i+2] == 0x00 && h264Data[i+3] == 0x01) {
-                        if (i + 4 < h264Data.size()) {
-                            uint8_t nalType = h264Data[i+4] & 0x1F;
-                            LOG(INFO) << "🎯 Found NAL unit at offset " << i 
-                                      << ", type: " << (int)nalType 
-                                      << " (" << getNALTypeName(nalType) << ")";
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // Create comprehensive debug info file
-    std::string debugFile = dumpPrefix + "_debug_info.txt";
-    std::ofstream debugOut(debugFile);
-    if (debugOut.is_open()) {
-        debugOut << "MP4 Snapshot Debug Information\n";
-        debugOut << "==============================\n\n";
-        debugOut << "Timestamp: " << getCurrentTimestamp() << "\n";
-        debugOut << "Frame dimensions: " << width << "x" << height << "\n";
-        debugOut << "Device pixel format: " << m_pixelFormat << "\n";
-        debugOut << "V4L2 format: 0x" << std::hex << m_v4l2Format << std::dec 
-                 << " (" << v4l2FormatToString(m_v4l2Format) << ")\n";
-        debugOut << "Format initialized: " << (m_formatInitialized ? "YES" : "NO") << "\n\n";
-        
-        debugOut << "Data sizes:\n";
-        debugOut << "- SPS: " << spsData.size() << " bytes\n";
-        debugOut << "- PPS: " << ppsData.size() << " bytes\n";
-        debugOut << "- H264: " << h264Data.size() << " bytes\n\n";
-        
-        if (!spsData.empty()) {
-            debugOut << "SPS Analysis:\n";
-            if (spsData.size() >= 4) {
-                debugOut << "- Profile: 0x" << std::hex << (int)spsData[1] << std::dec << "\n";
-                debugOut << "- Constraints: 0x" << std::hex << (int)spsData[2] << std::dec << "\n";
-                debugOut << "- Level: 0x" << std::hex << (int)spsData[3] << std::dec << "\n";
-            }
-            debugOut << "- Size: " << spsData.size() << " bytes\n";
-        }
-        
-        debugOut.close();
-        LOG(INFO) << "📋 Debug info saved to: " << debugFile;
-    }
-
-    // TODO: Implement actual MP4 creation logic
-    // For now, return empty string to fix compilation
-    return "";
-}
-
 // Helper function for NAL type names
 std::string SnapshotManager::getNALTypeName(uint8_t nalType) {
     switch (nalType) {
@@ -1196,9 +1014,141 @@ std::string SnapshotManager::getCurrentTimestamp() {
     std::stringstream ss;
     ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
     return ss.str();
-}
+} 
 
 void SnapshotManager::enableFullDump(const std::string& dumpDir) {
     m_fullDumpEnabled = true;
     m_fullDumpDir = dumpDir;
+}
+
+void SnapshotManager::debugDumpH264Data(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps, 
+                                     const std::vector<uint8_t>& h264Data, int width, int height) {
+#ifdef DEBUG_DUMP_H264_DATA
+    LOG(INFO) << "[DEBUG] Dumping H264 data for analysis";
+    LOG(INFO) << "[DATA] Input data sizes - SPS: " << sps.size() 
+              << ", PPS: " << pps.size() 
+              << ", H264: " << h264Data.size();
+    LOG(INFO) << "[VIDEO] Frame dimensions: " << width << "x" << height;
+    LOG(INFO) << "[FORMAT] Device pixel format: " << m_pixelFormat;
+    LOG(INFO) << "[V4L2] V4L2 format: 0x" << std::hex << m_v4l2Format << std::dec 
+              << " (" << v4l2FormatToString(m_v4l2Format) << ")";
+
+    // Create dump files for debugging
+    static int dumpCounter = 0;
+    dumpCounter++;
+    
+    std::string dumpPrefix = "tmp/debug_dump_" + std::to_string(dumpCounter);
+    
+    // Dump SPS data
+    if (!sps.empty()) {
+        std::string spsFile = dumpPrefix + "_sps.bin";
+        std::ofstream spsOut(spsFile, std::ios::binary);
+        if (spsOut.is_open()) {
+            spsOut.write(reinterpret_cast<const char*>(sps.data()), sps.size());
+            spsOut.close();
+            LOG(INFO) << "[DUMP] SPS dumped to: " << spsFile;
+            
+            // Log SPS hex data
+            std::stringstream spsHex;
+            for (size_t i = 0; i < std::min((size_t)32, sps.size()); i++) {
+                spsHex << std::hex << std::setfill('0') << std::setw(2) 
+                       << (int)sps[i] << " ";
+            }
+            LOG(INFO) << "[HEX] SPS data (first 32 bytes): " << spsHex.str();
+        }
+    }
+    
+    // Dump PPS data
+    if (!pps.empty()) {
+        std::string ppsFile = dumpPrefix + "_pps.bin";
+        std::ofstream ppsOut(ppsFile, std::ios::binary);
+        if (ppsOut.is_open()) {
+            ppsOut.write(reinterpret_cast<const char*>(pps.data()), pps.size());
+            ppsOut.close();
+            LOG(INFO) << "[DUMP] PPS dumped to: " << ppsFile;
+            
+            // Log PPS hex data
+            std::stringstream ppsHex;
+            for (size_t i = 0; i < std::min((size_t)16, pps.size()); i++) {
+                ppsHex << std::hex << std::setfill('0') << std::setw(2) 
+                       << (int)pps[i] << " ";
+            }
+            LOG(INFO) << "[HEX] PPS data: " << ppsHex.str();
+        }
+    }
+    
+    // Dump H264 frame data
+    if (!h264Data.empty()) {
+        std::string h264File = dumpPrefix + "_h264_frame.bin";
+        std::ofstream h264Out(h264File, std::ios::binary);
+        if (h264Out.is_open()) {
+            h264Out.write(reinterpret_cast<const char*>(h264Data.data()), h264Data.size());
+            h264Out.close();
+            LOG(INFO) << "[DUMP] H264 frame dumped to: " << h264File;
+            
+            // Log H264 frame start
+            std::stringstream h264Hex;
+            for (size_t i = 0; i < std::min((size_t)32, h264Data.size()); i++) {
+                h264Hex << std::hex << std::setfill('0') << std::setw(2) 
+                        << (int)h264Data[i] << " ";
+            }
+            LOG(INFO) << "[HEX] H264 frame start: " << h264Hex.str();
+            
+            // Analyze NAL unit type
+            if (h264Data.size() >= 4) {
+                // Look for start codes and NAL units
+                for (size_t i = 0; i < h264Data.size() - 4; i++) {
+                    if (h264Data[i] == 0x00 && h264Data[i+1] == 0x00 && 
+                        h264Data[i+2] == 0x00 && h264Data[i+3] == 0x01) {
+                        if (i + 4 < h264Data.size()) {
+                            uint8_t nalType = h264Data[i+4] & 0x1F;
+                            LOG(INFO) << "[NAL] Found NAL unit at offset " << i 
+                                      << ", type: " << (int)nalType 
+                                      << " (" << getNALTypeName(nalType) << ")";
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Create comprehensive debug info file
+    std::string debugFile = dumpPrefix + "_debug_info.txt";
+    std::ofstream debugOut(debugFile);
+    if (debugOut.is_open()) {
+        debugOut << "H264 Camera Data Debug Information\n";
+        debugOut << "==================================\n\n";
+        debugOut << "Timestamp: " << getCurrentTimestamp() << "\n";
+        debugOut << "Frame dimensions: " << width << "x" << height << "\n";
+        debugOut << "Device pixel format: " << m_pixelFormat << "\n";
+        debugOut << "V4L2 format: 0x" << std::hex << m_v4l2Format << std::dec 
+                 << " (" << v4l2FormatToString(m_v4l2Format) << ")\n";
+        debugOut << "Format initialized: " << (m_formatInitialized ? "YES" : "NO") << "\n\n";
+        
+        debugOut << "Data sizes:\n";
+        debugOut << "- SPS: " << sps.size() << " bytes\n";
+        debugOut << "- PPS: " << pps.size() << " bytes\n";
+        debugOut << "- H264: " << h264Data.size() << " bytes\n\n";
+        
+        if (!sps.empty()) {
+            debugOut << "SPS Analysis:\n";
+            if (sps.size() >= 4) {
+                debugOut << "- Profile: 0x" << std::hex << (int)sps[1] << std::dec << "\n";
+                debugOut << "- Constraints: 0x" << std::hex << (int)sps[2] << std::dec << "\n";
+                debugOut << "- Level: 0x" << std::hex << (int)sps[3] << std::dec << "\n";
+            }
+            debugOut << "- Size: " << sps.size() << " bytes\n";
+        }
+        
+        debugOut.close();
+        LOG(INFO) << "[DEBUG] Debug info saved to: " << debugFile;
+    }
+#else
+    // Silent when debug is disabled - avoid unused parameter warnings
+    (void)sps;
+    (void)pps;
+    (void)h264Data;
+    (void)width;
+    (void)height;
+#endif
 }

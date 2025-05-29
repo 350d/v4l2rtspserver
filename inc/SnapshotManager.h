@@ -86,12 +86,6 @@ public:
     std::string getNALTypeName(uint8_t nalType);
     std::string getCurrentTimestamp();
 
-    // Enhanced MP4 creation with debugging
-    std::string createMP4Snapshot(const std::vector<uint8_t>& spsData, 
-                                 const std::vector<uint8_t>& ppsData, 
-                                 const std::vector<uint8_t>& h264Data,
-                                 int width, int height);
-
     // Enhanced dumping methods
     static void dumpDeviceInfo(const std::string& device, int width, int height, 
                               int pixelFormat, int fps);
@@ -124,6 +118,10 @@ private:
     
     // Dynamic NAL unit extraction (inspired by go2rtc)
     std::vector<uint8_t> findNALUnit(const uint8_t* data, size_t size, uint8_t nalType);
+    
+    // Debug dump functionality
+    void debugDumpH264Data(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps, 
+                          const std::vector<uint8_t>& h264Data, int width, int height);
     
     // Members
     bool m_enabled;
