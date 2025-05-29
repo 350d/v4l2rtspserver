@@ -13,8 +13,9 @@
 #include "EnhancedAvcC.h"
 #include "logger.h"
 #include "../libv4l2cpp/inc/V4l2Capture.h"
-#include <cstring>
 #include <string>
+#include <vector>
+#include <cstring>
 #include <fstream>
 #include <algorithm>
 #include <cstdlib>
@@ -62,6 +63,15 @@ public:
             instance = new FullDataDumper();
         }
         return instance;
+    }
+    
+    void setDumpDir(const std::string& dir) {
+        dumpDir = dir;
+        std::string cmd = "mkdir -p " + dumpDir;
+        int result = system(cmd.c_str());
+        (void)result;
+        LOG(NOTICE) << "🎬 Full data dumper directory set: " << dumpDir;
+        initialized = true;
     }
     
     // Dump V4L2 device information
@@ -416,570 +426,147 @@ std::vector<uint8_t> SnapshotManager::findNALUnit(const uint8_t* data, size_t si
     return result;
 }
 
-void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h264Size, int width, int height, const std::string& sps, const std::string& pps) {
-    // ENHANCED DEBUGGING - Always enabled for testing
-    static int dumpCounter = 0;
-    dumpCounter++;
-    
-    // FULL DATA DUMPING - Initialize on first call
-    static bool fullDumpInitialized = false;
-    if (!fullDumpInitialized) {
-        FullDataDumper* dumper = FullDataDumper::getInstance();
-        dumper->dumpSystemInfo();
-        dumper->dumpV4L2DeviceInfo("/dev/video0");
-        fullDumpInitialized = true;
-    }
-    
-    // Dump all frame data
-    FullDataDumper::getInstance()->dumpH264StreamData(sps, pps, h264Data, h264Size, dumpCounter, width, height);
-    
-    LOG(INFO) << "🎬 Creating H264 snapshot #" << dumpCounter << " with enhanced debugging";
-    LOG(INFO) << "📊 Input data sizes - SPS: " << sps.size() 
-              << ", PPS: " << pps.size() 
-              << ", H264: " << h264Size;
-    LOG(INFO) << "📺 Frame dimensions: " << width << "x" << height;
-    LOG(INFO) << "🎨 Device pixel format: " << m_pixelFormat;
-    LOG(INFO) << "🔧 V4L2 format: 0x" << std::hex << m_v4l2Format << std::dec 
-              << " (" << v4l2FormatToString(m_v4l2Format) << ")";
-
-    std::string dumpPrefix = "tmp/debug_dump_" + std::to_string(dumpCounter);
-    
-    // Dump SPS data
-    if (!sps.empty()) {
-        std::string spsFile = dumpPrefix + "_sps.bin";
-        std::ofstream spsOut(spsFile, std::ios::binary);
-        if (spsOut.is_open()) {
-            spsOut.write(sps.data(), sps.size());
-            spsOut.close();
-            LOG(INFO) << "💾 SPS dumped to: " << spsFile;
-            
-            // Log SPS hex data
-            std::stringstream spsHex;
-            for (size_t i = 0; i < std::min((size_t)32, sps.size()); i++) {
-                spsHex << std::hex << std::setfill('0') << std::setw(2) 
-                       << (int)(unsigned char)sps[i] << " ";
-            }
-            LOG(INFO) << "🔍 SPS data (first 32 bytes): " << spsHex.str();
-            }
-        } else {
-        LOG(INFO) << "⚠️ No SPS data available";
-    }
-    
-    // Dump PPS data
-    if (!pps.empty()) {
-        std::string ppsFile = dumpPrefix + "_pps.bin";
-        std::ofstream ppsOut(ppsFile, std::ios::binary);
-        if (ppsOut.is_open()) {
-            ppsOut.write(pps.data(), pps.size());
-            ppsOut.close();
-            LOG(INFO) << "💾 PPS dumped to: " << ppsFile;
-            
-            // Log PPS hex data
-            std::stringstream ppsHex;
-            for (size_t i = 0; i < std::min((size_t)16, pps.size()); i++) {
-                ppsHex << std::hex << std::setfill('0') << std::setw(2) 
-                       << (int)(unsigned char)pps[i] << " ";
-            }
-            LOG(INFO) << "🔍 PPS data: " << ppsHex.str();
-        }
-    } else {
-        LOG(INFO) << "⚠️ No PPS data available";
-    }
-    
-    // Dump H264 frame data
-    if (h264Data && h264Size > 0) {
-        std::string h264File = dumpPrefix + "_h264_frame.bin";
-        std::ofstream h264Out(h264File, std::ios::binary);
-        if (h264Out.is_open()) {
-            h264Out.write(reinterpret_cast<const char*>(h264Data), h264Size);
-            h264Out.close();
-            LOG(INFO) << "💾 H264 frame dumped to: " << h264File;
-            
-            // Log H264 frame start
-            std::stringstream h264Hex;
-            for (size_t i = 0; i < std::min((size_t)32, h264Size); i++) {
-                h264Hex << std::hex << std::setfill('0') << std::setw(2) 
-                        << (int)h264Data[i] << " ";
-            }
-            LOG(INFO) << "🔍 H264 frame start: " << h264Hex.str();
-            
-            // Analyze NAL unit type
-            if (h264Size >= 4) {
-                // Look for start codes and NAL units
-                for (size_t i = 0; i < h264Size - 4; i++) {
-                    if (h264Data[i] == 0x00 && h264Data[i+1] == 0x00 && 
-                        h264Data[i+2] == 0x00 && h264Data[i+3] == 0x01) {
-                        if (i + 4 < h264Size) {
-                            uint8_t nalType = h264Data[i+4] & 0x1F;
-                            LOG(INFO) << "🎯 Found NAL unit at offset " << i 
-                                      << ", type: " << (int)nalType 
-                                      << " (" << getNALTypeName(nalType) << ")";
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        LOG(INFO) << "⚠️ No H264 frame data available";
-    }
-    
-    // Create comprehensive debug info file
-    std::string debugFile = dumpPrefix + "_debug_info.txt";
-    std::ofstream debugOut(debugFile);
-    if (debugOut.is_open()) {
-        debugOut << "MP4 Snapshot Debug Information\n";
-        debugOut << "==============================\n\n";
-        debugOut << "Timestamp: " << getCurrentTimestamp() << "\n";
-        debugOut << "Frame dimensions: " << width << "x" << height << "\n";
-        debugOut << "Device pixel format: " << m_pixelFormat << "\n";
-        debugOut << "V4L2 format: 0x" << std::hex << m_v4l2Format << std::dec 
-                 << " (" << v4l2FormatToString(m_v4l2Format) << ")\n";
-        debugOut << "Format initialized: " << (m_formatInitialized ? "YES" : "NO") << "\n\n";
-        
-        debugOut << "Data sizes:\n";
-        debugOut << "- SPS: " << sps.size() << " bytes\n";
-        debugOut << "- PPS: " << pps.size() << " bytes\n";
-        debugOut << "- H264: " << h264Size << " bytes\n\n";
-        
-        if (!sps.empty()) {
-            debugOut << "SPS Analysis:\n";
-            if (sps.size() >= 4) {
-                debugOut << "- Profile: 0x" << std::hex << (int)(unsigned char)sps[1] << std::dec << "\n";
-                debugOut << "- Constraints: 0x" << std::hex << (int)(unsigned char)sps[2] << std::dec << "\n";
-                debugOut << "- Level: 0x" << std::hex << (int)(unsigned char)sps[3] << std::dec << "\n";
-            }
-            debugOut << "- Size: " << sps.size() << " bytes\n";
-        }
-        
-        debugOut.close();
-        LOG(INFO) << "📋 Debug info saved to: " << debugFile;
-    }
-
-    std::vector<unsigned char> mp4Data;
-    mp4Data.reserve(h264Size + 2048); // Reserve space for headers + data
-    
-    // DYNAMIC SPS/PPS EXTRACTION (inspired by go2rtc)
-    // Try to extract SPS/PPS from the H.264 stream first
-    std::string extractedSPS, extractedPPS;
-    
-    if (h264Data && h264Size > 0) {
-        // Extract SPS (NAL type 7) from stream
-        std::vector<uint8_t> spsData = findNALUnit(h264Data, h264Size, 7);
-        if (!spsData.empty()) {
-            extractedSPS.assign(spsData.begin(), spsData.end());
-            LOG(DEBUG) << "Extracted SPS from stream: " << spsData.size() << " bytes";
-        }
-        
-        // Extract PPS (NAL type 8) from stream  
-        std::vector<uint8_t> ppsData = findNALUnit(h264Data, h264Size, 8);
-        if (!ppsData.empty()) {
-            extractedPPS.assign(ppsData.begin(), ppsData.end());
-            LOG(DEBUG) << "Extracted PPS from stream: " << ppsData.size() << " bytes";
-        }
-    }
-    
-    // PRIORITY SYSTEM: Real data > Provided data > Cached data > Fallback
-    std::string spsToUse, ppsToUse;
-    
-    // Priority 1: Extracted from current stream
-    if (!extractedSPS.empty()) {
-        spsToUse = extractedSPS;
-    }
-    // Priority 2: Provided as parameter
-    else if (!sps.empty()) {
-        spsToUse = sps;
-    }
-    // Priority 3: Cached from previous frames
-    else if (!m_lastSPS.empty()) {
-        spsToUse = m_lastSPS;
-    }
-    // Priority 4: Universal fallback based on user's real camera data
-    else {
-        // Universal SPS based on real data from user's camera (High Profile, Level 4.0)
-        const uint8_t fallbackSPS[] = {0x27, 0x64, 0x00, 0x28, 0xac, 0x2b, 0x40, 0x3c, 
-                                      0x01, 0x13, 0xf2, 0xc0, 0x3c, 0x48, 0x9a, 0x80};
-        spsToUse.assign(reinterpret_cast<const char*>(fallbackSPS), sizeof(fallbackSPS));
-        LOG(DEBUG) << "Using universal fallback SPS: " << sizeof(fallbackSPS) << " bytes";
-    }
-    
-    // Same priority system for PPS
-    if (!extractedPPS.empty()) {
-        ppsToUse = extractedPPS;
-    }
-    else if (!pps.empty()) {
-        ppsToUse = pps;
-    }
-    else if (!m_lastPPS.empty()) {
-        ppsToUse = m_lastPPS;
-    }
-    else {
-        // Universal PPS based on real data from user's camera
-        const uint8_t fallbackPPS[] = {0x28, 0xee, 0x02, 0x5c, 0xb0};
-        ppsToUse.assign(reinterpret_cast<const char*>(fallbackPPS), sizeof(fallbackPPS));
-        LOG(DEBUG) << "Using universal fallback PPS: " << sizeof(fallbackPPS) << " bytes";
-    }
-
-    // Use cached data if available, otherwise use provided data
-    const unsigned char* dataToUse = m_lastH264Frame.empty() ? h264Data : m_lastH264Frame.data();
-    size_t sizeToUse = m_lastH264Frame.empty() ? h264Size : m_lastH264Frame.size();
-    
-    // Cache the frame data and SPS/PPS for future use
-    if (h264Data && h264Size > 0) {
-        m_lastH264Frame.assign(h264Data, h264Data + h264Size);
-        // Update cached SPS/PPS with the best available data
-        if (!spsToUse.empty()) m_lastSPS = spsToUse;
-        if (!ppsToUse.empty()) m_lastPPS = ppsToUse;
-        m_lastFrameWidth = width;
-        m_lastFrameHeight = height;
-    }
-    
-    if (!dataToUse || sizeToUse == 0) {
+void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h264Size, 
+                                       int width, int height,
+                                       const std::string& sps, const std::string& pps) {
+    if (!m_enabled || !h264Data || h264Size == 0) {
         return;
     }
-    
-    // Use actual dimensions or fallback to defaults
-    int actualWidth = (width > 0) ? width : m_width;
-    int actualHeight = (height > 0) ? height : m_height;
-    if (actualWidth <= 0) actualWidth = 640;
-    if (actualHeight <= 0) actualHeight = 480;
-    
-    // Helper functions for big-endian writing
-    auto writeBE32 = [&mp4Data](uint32_t value) {
-        mp4Data.push_back((value >> 24) & 0xFF);
-        mp4Data.push_back((value >> 16) & 0xFF);
-        mp4Data.push_back((value >> 8) & 0xFF);
-        mp4Data.push_back(value & 0xFF);
+
+    // Prepare MP4 boxes
+    std::vector<uint8_t> mp4Data;
+
+    // ftyp box
+    const uint8_t ftypBox[] = {
+        0x00, 0x00, 0x00, 0x20,             // box size
+        0x66, 0x74, 0x79, 0x70,             // 'ftyp'
+        0x69, 0x73, 0x6F, 0x6D,             // major_brand: 'isom'
+        0x00, 0x00, 0x02, 0x00,             // minor_version: 0x200
+        0x69, 0x73, 0x6F, 0x6D,             // compatible_brands: 'isom'
+        0x69, 0x73, 0x6F, 0x32,             // 'iso2'
+        0x61, 0x76, 0x63, 0x31,             // 'avc1'
+        0x6D, 0x70, 0x34, 0x31              // 'mp41'
     };
-    
-    auto writeBE16 = [&mp4Data](uint16_t value) {
-        mp4Data.push_back((value >> 8) & 0xFF);
-        mp4Data.push_back(value & 0xFF);
+    mp4Data.insert(mp4Data.end(), ftypBox, ftypBox + sizeof(ftypBox));
+
+    // mdat box - contains NAL units with start codes
+    std::vector<uint8_t> mdatData;
+    const uint8_t startCode[] = {0x00, 0x00, 0x00, 0x01};
+
+    // Add SPS
+    if (!sps.empty()) {
+        mdatData.insert(mdatData.end(), startCode, startCode + 4);
+        mdatData.insert(mdatData.end(), sps.begin(), sps.end());
+    }
+
+    // Add PPS
+    if (!pps.empty()) {
+        mdatData.insert(mdatData.end(), startCode, startCode + 4);
+        mdatData.insert(mdatData.end(), pps.begin(), pps.end());
+    }
+
+    // Add H264 frame
+    mdatData.insert(mdatData.end(), startCode, startCode + 4);
+    mdatData.insert(mdatData.end(), h264Data, h264Data + h264Size);
+
+    // mdat box header
+    uint32_t mdatSize = mdatData.size() + 8;  // data size + box header
+    mp4Data.push_back((mdatSize >> 24) & 0xFF);
+    mp4Data.push_back((mdatSize >> 16) & 0xFF);
+    mp4Data.push_back((mdatSize >> 8) & 0xFF);
+    mp4Data.push_back(mdatSize & 0xFF);
+    mp4Data.push_back('m');
+    mp4Data.push_back('d');
+    mp4Data.push_back('a');
+    mp4Data.push_back('t');
+    mp4Data.insert(mp4Data.end(), mdatData.begin(), mdatData.end());
+
+    // moov box - contains video metadata
+    std::vector<uint8_t> moovBox;
+    // mvhd
+    const uint8_t mvhdBox[] = {
+        0x00, 0x00, 0x00, 0x6C,             // box size
+        0x6D, 0x76, 0x68, 0x64,             // 'mvhd'
+        0x00, 0x00, 0x00, 0x00,             // version/flags
+        0x00, 0x00, 0x00, 0x00,             // creation_time
+        0x00, 0x00, 0x00, 0x00,             // modification_time
+        0x00, 0x00, 0x03, 0xE8,             // timescale = 1000
+        0x00, 0x00, 0x00, 0x01,             // duration = 1 sec
     };
-    
-    // Helper function to write box header
-    auto writeBoxHeader = [&mp4Data, &writeBE32](uint32_t size, const char* type) {
-        writeBE32(size);
-        mp4Data.insert(mp4Data.end(), type, type + 4);
+    moovBox.insert(moovBox.end(), mvhdBox, mvhdBox + sizeof(mvhdBox));
+
+    // Add matrix and other mvhd fields
+    const uint8_t mvhdMatrix[] = {
+        0x00, 0x01, 0x00, 0x00,             // rate = 1.0
+        0x01, 0x00,                         // volume = 1.0
+        0x00, 0x00,                         // reserved
+        0x00, 0x00, 0x00, 0x00,             // reserved
+        0x00, 0x01, 0x00, 0x00,             // matrix[0]
+        0x00, 0x00, 0x00, 0x00,             // matrix[1]
+        0x00, 0x00, 0x00, 0x00,             // matrix[2]
+        0x00, 0x00, 0x00, 0x00,             // matrix[3]
+        0x00, 0x01, 0x00, 0x00,             // matrix[4]
+        0x00, 0x00, 0x00, 0x00,             // matrix[5]
+        0x00, 0x00, 0x00, 0x00,             // matrix[6]
+        0x00, 0x00, 0x00, 0x00,             // matrix[7]
+        0x40, 0x00, 0x00, 0x00,             // matrix[8]
+        0x00, 0x00, 0x00, 0x00,             // pre_defined
+        0x00, 0x00, 0x00, 0x00,             // pre_defined
+        0x00, 0x00, 0x00, 0x00,             // pre_defined
+        0x00, 0x00, 0x00, 0x00,             // pre_defined
+        0x00, 0x00, 0x00, 0x00,             // pre_defined
+        0x00, 0x00, 0x00, 0x00,             // pre_defined
+        0x00, 0x00, 0x00, 0x02              // next_track_ID
     };
-    
-    // Calculate sizes for nested boxes
-    // DYNAMIC SIZING: Use real SPS/PPS sizes from extracted or cached data
-    size_t spsSize = spsToUse.size(); // Real size from extracted/cached/fallback data
-    size_t ppsSize = ppsToUse.size(); // Real size from extracted/cached/fallback data
-    
-    uint32_t avcCSize = 8 + 7 + 2 + spsSize + 1 + 2 + ppsSize; // 8(header) + 7(fixed) + 2+sps + 1+2+pps
-    uint32_t avc1Size = 8 + 78 + avcCSize;
-    uint32_t stsdSize = 8 + 8 + avc1Size;
-    uint32_t stblSize = 8 + stsdSize + 16 + 16 + 20 + 20 + 16; // stsd + stts + stss + stsc(20) + stsz + stco
-    uint32_t minfSize = 8 + 20 + 36 + stblSize; // vmhd + dinf + stbl
-    uint32_t mdiaSize = 8 + 32 + 33 + minfSize; // mdhd + hdlr + minf
-    uint32_t trakSize = 8 + 92 + mdiaSize; // tkhd (92) + mdia
-    uint32_t moovSize = 8 + 108 + trakSize; // mvhd (108 total: 8 header + 100 content) + trak
-    
-    // Calculate mdat size dynamically after H.264 conversion
-    // We'll update this after processing the H.264 data
-    size_t mdatHeaderPos = mp4Data.size(); // Remember position for size update
-    uint32_t totalSize = 32 + moovSize; // ftyp + moov (mdat size will be added later)
-    
-    // 1. ftyp box (File Type Box) - 32 bytes total
-    writeBoxHeader(32, "ftyp");
-    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', 'm'}); // major_brand
-    writeBE32(0x00000200); // minor_version
-    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', 'm'}); // compatible_brands[0]
-    mp4Data.insert(mp4Data.end(), {'i', 's', 'o', '2'}); // compatible_brands[1]
-    mp4Data.insert(mp4Data.end(), {'a', 'v', 'c', '1'}); // compatible_brands[2]
-    mp4Data.insert(mp4Data.end(), {'m', 'p', '4', '1'}); // compatible_brands[3]
-    
-    // 2. mdat box (Media Data Box) - put before moov for streaming
-    size_t mdatSizePos = mp4Data.size(); // Remember position for size update
-    writeBoxHeader(0, "mdat"); // Temporary size, will be updated later
-    size_t mdatDataStart = mp4Data.size(); // Start of mdat data
-    
-    // Convert H.264 data from Annex B format (start codes) to AVCC format (length prefix)
-    // H.264 data from camera typically has start codes (0x00000001 or 0x000001)
-    // MP4 container requires NAL units with length prefix instead
-    
-    const unsigned char* currentPos = dataToUse;
-    const unsigned char* endPos = dataToUse + sizeToUse;
-    bool foundStartCodes = false;
-    
-    // First, check if data contains start codes
-    while (currentPos < endPos - 3) {
-        if ((currentPos[0] == 0x00 && currentPos[1] == 0x00 && 
-             currentPos[2] == 0x00 && currentPos[3] == 0x01) ||
-            (currentPos[0] == 0x00 && currentPos[1] == 0x00 && currentPos[2] == 0x01)) {
-            foundStartCodes = true;
-            break;
-        }
-        currentPos++;
-    }
-    
-    currentPos = dataToUse; // Reset position
-    
-    if (foundStartCodes) {
-        // Process data with start codes (Annex B format)
-        while (currentPos < endPos) {
-            // Look for start code (0x00000001 or 0x000001)
-            const unsigned char* nalStart = nullptr;
-            size_t startCodeSize = 0;
-            
-            // Check for 4-byte start code (0x00000001)
-            if (currentPos + 4 <= endPos && 
-                currentPos[0] == 0x00 && currentPos[1] == 0x00 && 
-                currentPos[2] == 0x00 && currentPos[3] == 0x01) {
-                nalStart = currentPos + 4;
-                startCodeSize = 4;
-            }
-            // Check for 3-byte start code (0x000001)
-            else if (currentPos + 3 <= endPos && 
-                     currentPos[0] == 0x00 && currentPos[1] == 0x00 && currentPos[2] == 0x01) {
-                nalStart = currentPos + 3;
-                startCodeSize = 3;
-            }
-            
-            if (nalStart) {
-                // Find next start code or end of data
-                const unsigned char* nextStart = nalStart;
-                while (nextStart < endPos) {
-                    if ((nextStart + 4 <= endPos && 
-                         nextStart[0] == 0x00 && nextStart[1] == 0x00 && 
-                         nextStart[2] == 0x00 && nextStart[3] == 0x01) ||
-                        (nextStart + 3 <= endPos && 
-                         nextStart[0] == 0x00 && nextStart[1] == 0x00 && nextStart[2] == 0x01)) {
-                        break;
-                    }
-                    nextStart++;
-                }
-                
-                // Calculate NAL unit size
-                size_t nalSize = nextStart - nalStart;
-                
-                if (nalSize > 0) {
-                    // Write NAL unit length prefix (4 bytes big-endian)
-                    writeBE32(nalSize);
-                    // Write NAL unit data
-                    mp4Data.insert(mp4Data.end(), nalStart, nalStart + nalSize);
-                }
-                
-                currentPos = nextStart;
-            } else {
-                // No start code found, treat remaining data as single NAL unit
-                if (currentPos < endPos) {
-                    size_t remainingSize = endPos - currentPos;
-                    writeBE32(remainingSize);
-                    mp4Data.insert(mp4Data.end(), currentPos, endPos);
-                }
-                break;
-            }
-        }
-    } else {
-        // Data doesn't contain start codes, treat as single NAL unit (already in correct format)
-        // Just add length prefix for the entire data
-        writeBE32(sizeToUse);
-        mp4Data.insert(mp4Data.end(), dataToUse, dataToUse + sizeToUse);
-    }
-    
-    // Update mdat box size now that we know the actual data size
-    size_t mdatDataSize = mp4Data.size() - mdatDataStart;
-    uint32_t mdatSize = 8 + mdatDataSize; // 8 bytes header + actual data size
-    
-    // Update the mdat size in the header (big-endian)
-    mp4Data[mdatSizePos] = (mdatSize >> 24) & 0xFF;
-    mp4Data[mdatSizePos + 1] = (mdatSize >> 16) & 0xFF;
-    mp4Data[mdatSizePos + 2] = (mdatSize >> 8) & 0xFF;
-    mp4Data[mdatSizePos + 3] = mdatSize & 0xFF;
-    
-    // 3. moov box (Movie Box)
-    writeBoxHeader(moovSize, "moov");
-    
-    // 3.1 mvhd box (Movie Header Box) - exactly 108 bytes total (8 header + 100 content)
-    writeBoxHeader(108, "mvhd");
-    mp4Data.push_back(0); // version (0 for 32-bit times)
-    mp4Data.insert(mp4Data.end(), 3, 0); // flags (24 bits)
-    writeBE32(0); // creation_time
-    writeBE32(0); // modification_time  
-    writeBE32(1000); // timescale
-    writeBE32(1000); // duration
-    writeBE32(0x00010000); // rate (1.0 fixed point)
-    writeBE16(0x0100); // volume (1.0 fixed point)
-    writeBE16(0); // reserved
-    writeBE32(0); writeBE32(0); // reserved (2x32 bits)
-    // transformation matrix (identity matrix) - 9x32 bits = 36 bytes
-    writeBE32(0x00010000); writeBE32(0); writeBE32(0);
-    writeBE32(0); writeBE32(0x00010000); writeBE32(0);
-    writeBE32(0); writeBE32(0); writeBE32(0x40000000);
-    // pre_defined - 6x32 bits = 24 bytes (corrected according to ISO 14496-1)
-    writeBE32(0); writeBE32(0); writeBE32(0); writeBE32(0); writeBE32(0); writeBE32(0);
-    writeBE32(2); // next_track_ID
-    
-    // 3.2 trak box (Track Box)
-    writeBoxHeader(trakSize, "trak");
-    
-    // 3.2.1 tkhd box (Track Header Box) - exactly 92 bytes for version 0
-    writeBoxHeader(92, "tkhd");
-    mp4Data.push_back(0); // version (0 for 32-bit times)
-    mp4Data.push_back(0); mp4Data.push_back(0); mp4Data.push_back(0x07); // flags (track enabled, in movie, in preview)
-    writeBE32(0); // creation_time
-    writeBE32(0); // modification_time
-    writeBE32(1); // track_ID
-    writeBE32(0); // reserved
-    writeBE32(1000); // duration
-    writeBE32(0); writeBE32(0); // reserved (2x32 bits)
-    writeBE16(0); // layer
-    writeBE16(0); // alternate_group
-    writeBE16(0); // volume
-    writeBE16(0); // reserved
-    // transformation matrix (identity)
-    writeBE32(0x00010000); writeBE32(0); writeBE32(0);
-    writeBE32(0); writeBE32(0x00010000); writeBE32(0);
-    writeBE32(0); writeBE32(0); writeBE32(0x40000000);
-    writeBE32(actualWidth << 16); // width (fixed point)
-    writeBE32(actualHeight << 16); // height (fixed point)
-    
-    // 3.2.2 mdia box (Media Box)
-    writeBoxHeader(mdiaSize, "mdia");
-    
-    // 3.2.2.1 mdhd box (Media Header Box) - exactly 32 bytes
-    writeBoxHeader(32, "mdhd");
-    mp4Data.push_back(0); // version
-    mp4Data.insert(mp4Data.end(), 3, 0); // flags
-    writeBE32(0); // creation_time
-    writeBE32(0); // modification_time
-    writeBE32(1000); // timescale
-    writeBE32(1000); // duration
-    writeBE16(0x55c4); // language (und)
-    writeBE16(0); // pre_defined
-    
-    // 3.2.2.2 hdlr box (Handler Reference Box) - exactly 33 bytes
-    writeBoxHeader(33, "hdlr");
-    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
-    writeBE32(0); // pre_defined
-    mp4Data.insert(mp4Data.end(), {'v', 'i', 'd', 'e'}); // handler_type
-    mp4Data.insert(mp4Data.end(), 12, 0); // reserved (3x32 bits)
-    mp4Data.push_back(0); // name (empty string)
-    
-    // 3.2.2.3 minf box (Media Information Box)
-    writeBoxHeader(minfSize, "minf");
-    
-    // 3.2.2.3.1 vmhd box (Video Media Header Box) - exactly 20 bytes
-    writeBoxHeader(20, "vmhd");
-    mp4Data.push_back(0); // version
-    mp4Data.push_back(0); mp4Data.push_back(0); mp4Data.push_back(1); // flags
-    writeBE16(0); // graphicsmode
-    writeBE16(0); writeBE16(0); writeBE16(0); // opcolor (3x16 bits)
-    
-    // 3.2.2.3.2 dinf box (Data Information Box) - exactly 36 bytes
-    writeBoxHeader(36, "dinf");
-    writeBoxHeader(28, "dref");
-    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
-    writeBE32(1); // entry_count
-    writeBoxHeader(12, "url ");
-    mp4Data.push_back(0); // version
-    mp4Data.push_back(0); mp4Data.push_back(0); mp4Data.push_back(1); // flags (self-contained)
-    
-    // 3.2.2.3.3 stbl box (Sample Table Box)
-    writeBoxHeader(stblSize, "stbl");
-    
-    // 3.2.2.3.3.1 stsd box (Sample Description Box)
-    writeBoxHeader(stsdSize, "stsd");
-    mp4Data.insert(mp4Data.end(), 4, 0); // version + flags
-    writeBE32(1); // entry_count
-    
-    // avc1 sample entry
-    writeBoxHeader(avc1Size, "avc1");
-    mp4Data.insert(mp4Data.end(), 6, 0); // reserved
-    writeBE16(1); // data_reference_index
-    writeBE16(0); // pre_defined
-    writeBE16(0); // reserved
-    mp4Data.insert(mp4Data.end(), 12, 0); // pre_defined (3x32 bits)
-    writeBE16(actualWidth); // width
-    writeBE16(actualHeight); // height
-    writeBE32(0x00480000); // horizresolution (72 dpi)
-    writeBE32(0x00480000); // vertresolution (72 dpi)
-    writeBE32(0); // reserved
-    writeBE16(1); // frame_count
-    mp4Data.insert(mp4Data.end(), 32, 0); // compressorname (32 bytes)
-    writeBE16(24); // depth
-    writeBE16(0xFFFF); // pre_defined
-    
-    // avcC box (AVC Configuration Box) - ENHANCED VERSION
-    writeBoxHeader(avcCSize, "avcC");
-    
-    // Parse SPS for enhanced profile information
-    SnapshotAvcC::SPSInfo spsInfo = SnapshotAvcC::parseBasicSPS(spsToUse);
-    
-    // Enhanced logging with profile information
-    LOG(INFO) << "🔧 Creating enhanced avcC box with profile: 0x" << std::hex 
-              << (int)spsInfo.profile_idc << std::dec 
-              << " (" << SnapshotAvcC::getProfileName(spsInfo.profile_idc) << ")";
-    
-    mp4Data.push_back(1); // configurationVersion
-    
-    // Use parsed profile information
-    mp4Data.push_back(spsInfo.profile_idc); // AVCProfileIndication
-    mp4Data.push_back(spsInfo.constraint_set_flags); // profile_compatibility
-    mp4Data.push_back(spsInfo.level_idc); // AVCLevelIndication
-    mp4Data.push_back(0xFF); // lengthSizeMinusOne (4 bytes)
-    
-    // Real SPS data
-    mp4Data.push_back(0xE1); // numOfSequenceParameterSets
-    writeBE16(spsSize);
-    mp4Data.insert(mp4Data.end(), spsToUse.begin(), spsToUse.end());
-    
-    // Real PPS data
-    mp4Data.push_back(1); // numOfPictureParameterSets
-    writeBE16(ppsSize);
-    mp4Data.insert(mp4Data.end(), ppsToUse.begin(), ppsToUse.end());
-    
-    // Add High Profile extensions if needed
-    if (spsInfo.profile_idc == 100 || spsInfo.profile_idc == 110 || 
-        spsInfo.profile_idc == 122 || spsInfo.profile_idc == 244) {
-        
-        LOG(INFO) << "📋 Adding High Profile extensions for profile 0x" << std::hex << (int)spsInfo.profile_idc << std::dec;
-        
-        // reserved (6 bits) + chroma_format (2 bits)
-        mp4Data.push_back(0xFC | (spsInfo.chroma_format_idc & 0x03));
-        
-        // reserved (5 bits) + bit_depth_luma_minus8 (3 bits)
-        mp4Data.push_back(0xF8 | (spsInfo.bit_depth_luma_minus8 & 0x07));
-        
-        // reserved (5 bits) + bit_depth_chroma_minus8 (3 bits)
-        mp4Data.push_back(0xF8 | (spsInfo.bit_depth_chroma_minus8 & 0x07));
-        
-        // numOfSequenceParameterSetExt (8 bits)
-        mp4Data.push_back(0); // No SPS extensions
-        
-        // Update avcC size to include extensions
-        uint32_t newAvcCSize = avcCSize + 4;
-        // Update the size in the box header (already written)
-        size_t avcCHeaderPos = mp4Data.size() - (7 + 2 + spsSize + 1 + 2 + ppsSize + 4) - 8;
-        mp4Data[avcCHeaderPos] = (newAvcCSize >> 24) & 0xFF;
-        mp4Data[avcCHeaderPos + 1] = (newAvcCSize >> 16) & 0xFF;
-        mp4Data[avcCHeaderPos + 2] = (newAvcCSize >> 8) & 0xFF;
-        mp4Data[avcCHeaderPos + 3] = newAvcCSize & 0xFF;
-    }
-    
-    // Store the MP4 data with enhanced codec information
+    moovBox.insert(moovBox.end(), mvhdMatrix, mvhdMatrix + sizeof(mvhdMatrix));
+
+    // trak box
+    const uint8_t trakBox[] = {
+        0x00, 0x00, 0x00, 0x5C,             // box size
+        0x74, 0x72, 0x61, 0x6B,             // 'trak'
+        // tkhd box
+        0x00, 0x00, 0x00, 0x54,             // box size
+        0x74, 0x6B, 0x68, 0x64,             // 'tkhd'
+        0x00, 0x00, 0x00, 0x0F,             // version=0, flags=0xF
+        0x00, 0x00, 0x00, 0x00,             // creation_time
+        0x00, 0x00, 0x00, 0x00,             // modification_time
+        0x00, 0x00, 0x00, 0x01,             // track_ID
+        0x00, 0x00, 0x00, 0x00,             // reserved
+        0x00, 0x00, 0x00, 0x01,             // duration
+    };
+    moovBox.insert(moovBox.end(), trakBox, trakBox + sizeof(trakBox));
+
+    // Add video dimensions
+    uint16_t w = width;
+    uint16_t h = height;
+    moovBox.push_back((w >> 8) & 0xFF);
+    moovBox.push_back(w & 0xFF);
+    moovBox.push_back(0x00);
+    moovBox.push_back(0x00);
+    moovBox.push_back((h >> 8) & 0xFF);
+    moovBox.push_back(h & 0xFF);
+
+    // Add moov box to MP4 data
+    uint32_t moovSize = moovBox.size() + 8;
+    mp4Data.push_back((moovSize >> 24) & 0xFF);
+    mp4Data.push_back((moovSize >> 16) & 0xFF);
+    mp4Data.push_back((moovSize >> 8) & 0xFF);
+    mp4Data.push_back(moovSize & 0xFF);
+    mp4Data.push_back('m');
+    mp4Data.push_back('o');
+    mp4Data.push_back('o');
+    mp4Data.push_back('v');
+    mp4Data.insert(mp4Data.end(), moovBox.begin(), moovBox.end());
+
+    // Store as snapshot
     {
-    std::lock_guard<std::mutex> lock(m_snapshotMutex);
-        m_snapshotData = std::move(mp4Data);
-        
-        // Generate enhanced MIME type with proper codec string
-        std::string codecString = SnapshotAvcC::generateCodecString(spsToUse);
-        m_snapshotMimeType = "video/mp4; codecs=\"" + codecString + "\"";
-        
-        LOG(INFO) << "🎯 Enhanced MP4 snapshot created:";
-        LOG(INFO) << "   Profile: " << SnapshotAvcC::getProfileName(spsInfo.profile_idc) 
-                  << " (0x" << std::hex << (int)spsInfo.profile_idc << std::dec << ")";
-        LOG(INFO) << "   Level: " << (spsInfo.level_idc / 10.0);
-        LOG(INFO) << "   Codec string: " << codecString;
-        LOG(INFO) << "   MIME type: " << m_snapshotMimeType;
-        
-        if (m_formatInitialized && !m_pixelFormat.empty()) {
-            LOG(DEBUG) << "   Pixel format: " << m_pixelFormat;
-        }
-        
+        std::lock_guard<std::mutex> lock(m_snapshotMutex);
+        m_snapshotData = mp4Data;
+        m_snapshotMimeType = "video/mp4";
+        m_lastSnapshotTime = std::time(nullptr);
         m_lastSnapshotTimePoint = std::chrono::steady_clock::now();
+        
+        LOG(INFO) << "H264 snapshot created: " << mp4Data.size() << " bytes";
     }
 }
 
@@ -1609,4 +1196,9 @@ std::string SnapshotManager::getCurrentTimestamp() {
     std::stringstream ss;
     ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
     return ss.str();
-} 
+}
+
+void SnapshotManager::enableFullDump(const std::string& dumpDir) {
+    m_fullDumpEnabled = true;
+    m_fullDumpDir = dumpDir;
+}
