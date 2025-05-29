@@ -18,6 +18,10 @@
 #include <ctime>
 #include <chrono>
 
+#ifdef __linux__
+#include <linux/videodev2.h>
+#endif
+
 // Forward declaration
 struct V4L2DeviceParameters;
 
@@ -88,6 +92,21 @@ public:
                                  const std::vector<uint8_t>& h264Data,
                                  int width, int height);
 
+    // Enhanced dumping methods
+    static void dumpDeviceInfo(const std::string& device, int width, int height, 
+                              int pixelFormat, int fps);
+#ifdef __linux__
+    static void dumpV4L2Capabilities(const v4l2_capability& caps);
+    static void dumpPixelFormat(const v4l2_format& fmt);
+#endif
+    static void dumpH264Parameters(const std::vector<uint8_t>& sps, 
+                                  const std::vector<uint8_t>& pps);
+    static void dumpFrameData(const std::vector<uint8_t>& frameData, 
+                             const std::string& frameType);
+    static void dumpSEIData(const std::vector<uint8_t>& seiData);
+    static void dumpStreamStatistics(int total, int i, int p, int b);
+    static std::string getDumpDirectory();
+
 private:
     SnapshotManager();
     ~SnapshotManager();
@@ -138,17 +157,4 @@ private:
     std::string m_lastPPS;
     int m_lastFrameWidth;
     int m_lastFrameHeight;
-}; 
-// Enhanced dumping methods
-public:
-    static void dumpDeviceInfo(const std::string& device, int width, int height, 
-                              int pixelFormat, int fps);
-    static void dumpV4L2Capabilities(const v4l2_capability& caps);
-    static void dumpPixelFormat(const v4l2_format& fmt);
-    static void dumpH264Parameters(const std::vector<uint8_t>& sps, 
-                                  const std::vector<uint8_t>& pps);
-    static void dumpFrameData(const std::vector<uint8_t>& frameData, 
-                             const std::string& frameType);
-    static void dumpSEIData(const std::vector<uint8_t>& seiData);
-    static void dumpStreamStatistics(int total, int i, int p, int b);
-    static std::string getDumpDirectory();
+};
