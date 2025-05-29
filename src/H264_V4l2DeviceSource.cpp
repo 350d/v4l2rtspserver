@@ -19,6 +19,7 @@
 #include "logger.h"
 #include "H264_V4l2DeviceSource.h"
 #include "SnapshotManager.h"
+#include "MP4Muxer.h"
 
 // ---------------------------------
 // H264 V4L2 FramedSource
@@ -134,4 +135,12 @@ bool H264_V4L2DeviceSource::isKeyFrame(const char* buffer, int size) {
 		res = (frameType == 5);
 	}
 	return res;
+}
+
+// Simple method to check if output file looks like MP4
+bool isMP4Output(int fd) {
+	// Simple heuristic: check if we have valid file descriptor
+	// In real implementation, this could be passed as a parameter
+	// For now, we'll detect based on successful MP4 operations
+	return fd > 0; // Will be improved when we integrate with V4l2RTSPServer
 }

@@ -55,6 +55,7 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 			{
 				// Check if it looks like a V4L2 device path before attempting V4L2 creation
 				bool isV4L2Device = (outputFile.find("/dev/video") == 0);
+				bool isMP4File = (outputFile.substr(outputFile.find_last_of('.') + 1) == "mp4");
 				
 				if (isV4L2Device) {
 					V4L2DeviceParameters outparam(outputFile.c_str(), videoCapture->getFormat(), videoCapture->getWidth(), videoCapture->getHeight(), 0, ioTypeOut);
@@ -69,10 +70,10 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 				
 				if (outfd == -1) {
 					// Try to open as regular file for writing
-					LOG(INFO) << (isV4L2Device ? "V4L2 output failed, trying regular file: " : "Opening regular file: ") << outputFile;
+					LOG(INFO) << (isV4L2Device ? "V4L2 output failed, trying regular file: " : (isMP4File ? "Opening MP4 file: " : "Opening regular file: ")) << outputFile;
 					outfd = open(outputFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 					if (outfd != -1) {
-						LOG(INFO) << "Opened regular file for output: " << outputFile << " fd:" << outfd;
+						LOG(INFO) << "Opened " << (isMP4File ? "MP4" : "regular") << " file for output: " << outputFile << " fd:" << outfd;
 					} else {
 						LOG(WARN) << "Cannot open output:" << outputFile << " err:" << strerror(errno);
 					}
