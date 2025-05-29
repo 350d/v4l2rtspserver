@@ -648,12 +648,12 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     mp4Data.push_back(1); // configurationVersion
     
     // Extract profile/level from real SPS data
-    if (spsData.size() >= 4) {
-        mp4Data.push_back(spsData[1]); // AVCProfileIndication from real SPS
-        mp4Data.push_back(spsData[2]); // profile_compatibility from real SPS
-        mp4Data.push_back(spsData[3]); // AVCLevelIndication from real SPS
+    if (spsToUse.size() >= 4) {
+        mp4Data.push_back((unsigned char)spsToUse[1]); // AVCProfileIndication from real SPS
+        mp4Data.push_back((unsigned char)spsToUse[2]); // profile_compatibility from real SPS
+        mp4Data.push_back((unsigned char)spsToUse[3]); // AVCLevelIndication from real SPS
         std::cout << "Using real SPS profile data: " << std::hex 
-                  << (int)spsData[1] << " " << (int)spsData[2] << " " << (int)spsData[3] << std::dec << std::endl;
+                  << (int)(unsigned char)spsToUse[1] << " " << (int)(unsigned char)spsToUse[2] << " " << (int)(unsigned char)spsToUse[3] << std::dec << std::endl;
     } else {
         mp4Data.push_back(0x64); // High Profile fallback
         mp4Data.push_back(0x00); // profile_compatibility
@@ -664,12 +664,12 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     // Real SPS data
     mp4Data.push_back(0xE1); // numOfSequenceParameterSets
     writeBE16(spsSize);
-    mp4Data.insert(mp4Data.end(), spsData.begin(), spsData.end());
+    mp4Data.insert(mp4Data.end(), spsToUse.begin(), spsToUse.end());
     
     // Real PPS data
     mp4Data.push_back(1); // numOfPictureParameterSets
     writeBE16(ppsSize);
-    mp4Data.insert(mp4Data.end(), ppsData.begin(), ppsData.end());
+    mp4Data.insert(mp4Data.end(), ppsToUse.begin(), ppsToUse.end());
     
     // Store the MP4 data with pixel format information
     {
@@ -1299,7 +1299,9 @@ std::string SnapshotManager::createMP4Snapshot(const std::vector<uint8_t>& spsDa
         LOG(INFO) << "📋 Debug info saved to: " << debugFile;
     }
 
-    // ... existing code ...
+    // TODO: Implement actual MP4 creation logic
+    // For now, return empty string to fix compilation
+    return "";
 }
 
 // Helper function for NAL type names
