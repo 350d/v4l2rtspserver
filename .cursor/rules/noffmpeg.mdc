@@ -4,5 +4,18 @@ globs:
 alwaysApply: true
 ---
 В этом проекте нельзя использовать ffmpeg и любые другие сторонние утилиты в коде, а только для тестирование резултьтата.
-для тестирования видео - используй ffplay
+для тестирования видео - используй ffplay, без подтверждения через ffplay - все созданный тестовые видео файлы считаются непригодными и битыми
+видео файлы тестируй минимум чере ffplay -v verbose -autoexit
+
+
+Always respond in Russian;
+Always use English for commits/comments/code;
+Don't create extra .md files;
+IMPORTANT: For test/temp scripts/files use tmp folder inside project;
+Im Mac user;
+Cleanup/remove docker resourses/images/builds after use;
+Run scripts/command in terminal with Y and auto exit/close options to make sure its not  run forever;
+Don't use complex terminal command to avoid infinite loops;
+
+
 
