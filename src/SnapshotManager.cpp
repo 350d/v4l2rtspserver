@@ -1029,7 +1029,7 @@ void SnapshotManager::autoSaveSnapshot() {
         if (!m_snapshotData.empty()) {
             dataToSave = m_snapshotData;
         } else {
-            dataToSave = m_currentSnapshot;
+        dataToSave = m_currentSnapshot;
         }
     }
     
@@ -1562,16 +1562,6 @@ void SnapshotManager::writeMP4ToFile(int fd, const unsigned char* h264Data, size
         return;
     }
     
-    // Clear the file before writing new MP4 data to avoid duplicated atoms
-    if (lseek(fd, 0, SEEK_SET) != 0) {
-        LOG(WARN) << "Failed to seek to beginning of file: " << strerror(errno);
-        return;
-    }
-    if (ftruncate(fd, 0) != 0) {
-        LOG(WARN) << "Failed to truncate file: " << strerror(errno);
-        return;
-    }
-    
     // Auto-detect dimensions from SPS
     int width = 1920, height = 1080;
     std::pair<int, int> detectedDims = parseSPSDimensions(sps);
@@ -1947,4 +1937,4 @@ void SnapshotManager::writeMP4ToFile(int fd, const unsigned char* h264Data, size
     }
     
     LOG(DEBUG) << "[writeMP4ToFile] Successfully wrote complete MP4: " << mp4Data.size() << " bytes (" << width << "x" << height << ")";
-}
+} 

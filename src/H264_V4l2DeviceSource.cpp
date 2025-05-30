@@ -41,7 +41,6 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	
 	// For proper H264 output file writing
 	std::vector<unsigned char> outputBuffer;
-	std::vector<unsigned char> idrFrameOnly; // For MP4: only IDR frame without SPS/PPS
 	bool hasKeyFrame = false;
 	
 	while (buffer != NULL)				
@@ -53,6 +52,7 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 			case 5: 
 				LOG(INFO) << "IDR size:" << size << " bufSize:" << bufSize; 
 				hasKeyFrame = true;
+				
 				// Process H264 keyframe for snapshot if enabled
 				if (SnapshotManager::getInstance().isEnabled()) {
 					// Get actual frame dimensions from device
@@ -118,22 +118,23 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	// Write properly formatted H264 data to output file
 	if (m_outfd != -1 && !outputBuffer.empty()) {
 		if (m_isMP4) {
-			// MP4 format - write raw H264 stream for now, MP4 muxing will be done at the end
-			// This prevents constant file rewriting and memory issues
-			int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
-			if (written != (int)outputBuffer.size()) {
-				LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
-			} else if (hasKeyFrame) {
-				LOG(DEBUG) << "H264 keyframe written to MP4 output: " << written << " bytes";
+			// TODO: Implement proper MP4 muxer for streaming
+			// For now, write raw H264 and suggest conversion to avoid file size issues
+			static bool warningShown = false;
+			if (!warningShown) {
+				LOG(WARN) << "MP4 streaming not fully implemented, writing raw H264 to avoid performance issues.";
+				LOG(WARN) << "Convert to MP4 with: ffmpeg -i output_file -c copy output_file.mp4";
+				warningShown = true;
 			}
-		} else {
-			// Raw H264 format
-			int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
-			if (written != (int)outputBuffer.size()) {
-				LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
-			} else if (hasKeyFrame) {
-				LOG(DEBUG) << "H264 keyframe written to output: " << written << " bytes";
-			}
+			// Fall back to raw H264 format for efficiency
+		}
+		
+		// Raw H264 format (both for .h264 files and .mp4 fallback)
+		int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
+		if (written != (int)outputBuffer.size()) {
+			LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
+		} else if (hasKeyFrame) {
+			LOG(DEBUG) << "H264 keyframe written to output: " << written << " bytes";
 		}
 	}
 	
