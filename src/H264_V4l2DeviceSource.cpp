@@ -20,7 +20,6 @@
 #include "H264_V4l2DeviceSource.h"
 #include "SnapshotManager.h"
 #include "MP4Muxer.h"
-#include "SimpleMP4Muxer.h"
 
 // ---------------------------------
 // H264 V4L2 FramedSource
@@ -28,11 +27,10 @@
 
 H264_V4L2DeviceSource::~H264_V4L2DeviceSource() {
 	// Finalize MP4 muxer if active
-	if (m_simpleMuxer && m_simpleMuxer->isInitialized()) {
-		m_simpleMuxer->finalize();
+	if (m_mp4Muxer && m_mp4Muxer->isInitialized()) {
+		m_mp4Muxer->finalize();
 	}
 	delete m_mp4Muxer;
-	delete m_simpleMuxer;
 }
 
 // split packet in frames					
@@ -134,15 +132,15 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	if (m_outfd != -1 && !outputBuffer.empty()) {
 		if (m_isMP4) {
 			// Initialize MP4 muxer on first keyframe
-			if (hasKeyFrame && !m_sps.empty() && !m_pps.empty() && !m_simpleMuxer) {
-				m_simpleMuxer = new SimpleMP4Muxer();
+			if (hasKeyFrame && !m_sps.empty() && !m_pps.empty() && !m_mp4Muxer) {
+				m_mp4Muxer = new MP4Muxer();
 				int frameWidth = (m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920;
 				int frameHeight = (m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080;
 				
-				if (!m_simpleMuxer->initialize(m_outfd, m_sps, m_pps, frameWidth, frameHeight)) {
+				if (!m_mp4Muxer->initialize(m_outfd, m_sps, m_pps, frameWidth, frameHeight)) {
 					LOG(ERROR) << "Failed to initialize MP4 muxer";
-					delete m_simpleMuxer;
-					m_simpleMuxer = nullptr;
+					delete m_mp4Muxer;
+					m_mp4Muxer = nullptr;
 					m_isMP4 = false; // Fall back to raw H264
 				} else {
 					LOG(INFO) << "MP4 muxer initialized successfully";
@@ -150,12 +148,12 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 			}
 			
 			// Add frame to MP4 muxer
-			if (m_simpleMuxer && m_simpleMuxer->isInitialized()) {
+			if (m_mp4Muxer && m_mp4Muxer->isInitialized()) {
 				// Use stored frame data from loop
 				if (!m_currentFrameData.empty()) {
-					m_simpleMuxer->addFrame(m_currentFrameData.data(), m_currentFrameData.size(), m_currentFrameIsKeyframe);
+					m_mp4Muxer->addFrame(m_currentFrameData.data(), m_currentFrameData.size(), m_currentFrameIsKeyframe);
 				}
-			} else if (!m_simpleMuxer) {
+			} else if (!m_mp4Muxer) {
 				// If muxer not ready, write raw H264 as fallback
 				int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
 				if (written != (int)outputBuffer.size()) {

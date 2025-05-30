@@ -1,25 +1,60 @@
+/* ---------------------------------------------------------------------------
+** This software is in the public domain, furnished "as is", without technical
+** support, and with no warranty, express or implied, as to its usefulness for
+** any purpose.
+**
+** MP4Muxer.h
+** 
+** MP4 muxer for efficient H264 video recording
+**
+** -------------------------------------------------------------------------*/
+
 #pragma once
 
-#include <vector>
 #include <string>
+#include <vector>
 #include <cstdint>
 
 class MP4Muxer {
-private:
-    int m_fd;
-    std::vector<uint8_t> m_sps, m_pps;
-    uint32_t m_frameCount;
-    bool m_initialized;
-    uint16_t m_width, m_height;
-    
 public:
-    MP4Muxer(int fd, uint16_t width, uint16_t height);
+    MP4Muxer();
     ~MP4Muxer();
     
-    void setSPSPPS(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps);
-    void writeKeyframe(const std::vector<uint8_t>& nalUnit);
-    void finalize();
+    // Initialize MP4 file with SPS/PPS and dimensions
+    bool initialize(int fd, const std::string& sps, const std::string& pps, int width, int height);
     
+    // Add H264 frame (will handle keyframes and regular frames)
+    bool addFrame(const unsigned char* h264Data, size_t dataSize, bool isKeyFrame);
+    
+    // Finalize MP4 file (update metadata)
+    bool finalize();
+    
+    // Check if muxer is initialized
     bool isInitialized() const { return m_initialized; }
-    uint32_t getFrameCount() const { return m_frameCount; }
+    
+private:
+    int m_fd;
+    bool m_initialized;
+    std::string m_sps;
+    std::string m_pps;
+    int m_width;
+    int m_height;
+    
+    // Track file positions for metadata updates
+    size_t m_mdatStartPos;
+    size_t m_currentPos;
+    
+    // Frame counting
+    uint32_t m_frameCount;
+    uint32_t m_keyFrameCount;
+    
+    // Helper methods from SnapshotManager
+    void write32(std::vector<uint8_t>& vec, uint32_t value);
+    void write16(std::vector<uint8_t>& vec, uint16_t value);
+    void write8(std::vector<uint8_t>& vec, uint8_t value);
+    void writeToFile(const void* data, size_t size);
+    
+    // MP4 structure creation (moved from SnapshotManager)
+    bool writeMP4Header();
+    std::pair<int, int> parseSPSDimensions(const std::string& sps);
 }; 
