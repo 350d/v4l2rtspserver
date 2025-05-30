@@ -66,6 +66,7 @@ private:
     
     // Track file positions for metadata updates
     size_t m_mdatStartPos;
+    size_t m_moovStartPos;  // Position of placeholder moov box
     size_t m_currentPos;
     
     // Frame counting

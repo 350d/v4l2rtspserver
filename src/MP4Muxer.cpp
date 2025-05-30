@@ -22,7 +22,7 @@
 
 MP4Muxer::MP4Muxer() 
     : m_fd(-1), m_initialized(false), m_width(0), m_height(0),
-      m_mdatStartPos(0), m_currentPos(0), m_frameCount(0), m_keyFrameCount(0) {
+      m_mdatStartPos(0), m_moovStartPos(0), m_currentPos(0), m_frameCount(0), m_keyFrameCount(0) {
     m_frames.clear(); // initialize empty frame vector
 }
 
@@ -143,19 +143,35 @@ bool MP4Muxer::finalize() {
         }
     }
     
-    // FIXED version: create proper moov box at the end of file
+    // FIXED version: update moov box at its placeholder position
     if (m_frameCount >= 1 && !m_frames.empty()) {
-        // Create proper moov box for all frames (including single frame)
+        // Create proper moov box for all frames
         std::vector<uint8_t> finalMoov = createMultiFrameMoovBox();
-        if (!finalMoov.empty()) {
-            writeToFile(finalMoov.data(), finalMoov.size());
-            LOG(INFO) << "[MP4Muxer] Written final moov box: " << finalMoov.size() << " bytes";
-            
-            // CRITICAL: Force moov box to disk immediately
-            if (m_fd != -1) {
-                fsync(m_fd);
-                LOG(INFO) << "[MP4Muxer] Forced moov box sync to disk";
+        if (!finalMoov.empty() && finalMoov.size() <= 8192) { // Check if fits in placeholder
+            // Seek to moov placeholder position and overwrite it
+            off_t originalPos = lseek(m_fd, 0, SEEK_CUR); // Save current position
+            if (lseek(m_fd, m_moovStartPos, SEEK_SET) != -1) {
+                // Write actual moov box
+                if (write(m_fd, finalMoov.data(), finalMoov.size()) == static_cast<ssize_t>(finalMoov.size())) {
+                    LOG(INFO) << "[MP4Muxer] Updated moov box at position " << m_moovStartPos << ": " << finalMoov.size() << " bytes";
+                    
+                    // Zero out remaining placeholder space
+                    size_t remainingSpace = 8192 - finalMoov.size();
+                    if (remainingSpace > 0) {
+                        std::vector<uint8_t> zeros(remainingSpace, 0);
+                        write(m_fd, zeros.data(), zeros.size());
+                    }
+                } else {
+                    LOG(ERROR) << "[MP4Muxer] Failed to write moov box: " << strerror(errno);
+                }
+                
+                // Return to original position
+                lseek(m_fd, originalPos, SEEK_SET);
+            } else {
+                LOG(ERROR) << "[MP4Muxer] Failed to seek to moov position: " << strerror(errno);
             }
+        } else {
+            LOG(ERROR) << "[MP4Muxer] Moov box too large (" << finalMoov.size() << " bytes) for placeholder (8192 bytes)";
         }
     }
     
@@ -610,24 +626,41 @@ std::vector<uint8_t> MP4Muxer::createMdatBox(const std::string& sps, const std::
     return mdat;
 }
 
-// Write MP4 header structure ONCE (refactored using helper methods)
+// Write MP4 header structure ONCE with MOOV FIRST for ffmpeg compatibility
 bool MP4Muxer::writeMP4Header() {
-    // Create minimal but valid MP4 structure
+    // Create structure: ftyp → moov → mdat (FFmpeg prefers this)
     std::vector<uint8_t> mp4Header;
 
     // 1. ftyp box
     std::vector<uint8_t> ftyp = createFtypBox();
     mp4Header.insert(mp4Header.end(), ftyp.begin(), ftyp.end());
 
-    // 2. Start mdat box (data will be appended here) - NO minimal moov!
+    // 2. PLACEHOLDER moov box (will be updated in finalize())
+    m_moovStartPos = mp4Header.size();  // Save moov position
+    
+    // Reserve space for moov (estimate ~8KB)
+    std::vector<uint8_t> placeholderMoov(8192, 0); // 8KB placeholder
+    // Write minimal moov header
+    placeholderMoov[0] = (8192 >> 24) & 0xFF;
+    placeholderMoov[1] = (8192 >> 16) & 0xFF; 
+    placeholderMoov[2] = (8192 >> 8) & 0xFF;
+    placeholderMoov[3] = 8192 & 0xFF;
+    placeholderMoov[4] = 'm';
+    placeholderMoov[5] = 'o';
+    placeholderMoov[6] = 'o';
+    placeholderMoov[7] = 'v';
+    
+    mp4Header.insert(mp4Header.end(), placeholderMoov.begin(), placeholderMoov.end());
+
+    // 3. Start mdat box after moov
     m_mdatStartPos = mp4Header.size();
-    write32(mp4Header, 0xFFFFFFFF); // Use extended size (indicates streaming)
+    write32(mp4Header, 0xFFFFFFFF); // Will be fixed in finalize
     mp4Header.insert(mp4Header.end(), {'m', 'd', 'a', 't'});
     
     // Write header to file
     writeToFile(mp4Header.data(), mp4Header.size());
     
-    LOG(INFO) << "[MP4Muxer] MP4 header written: " << mp4Header.size() << " bytes (ftyp + mdat start)";
+    LOG(INFO) << "[MP4Muxer] MP4 header written: " << mp4Header.size() << " bytes (ftyp + placeholder moov + mdat start)";
     return true;
 }
 
