@@ -649,6 +649,9 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     
     mp4Data.insert(mp4Data.end(), mdat.begin(), mdat.end());
 
+    // Calculate the correct chunk offset (start of SPS in mdat)
+    uint32_t mdatDataOffset = ftypSize + 8; // ftyp + mdat header (8 bytes)
+
     // 3. moov box (FULL VERSION as in REFERENCE.cpp)
     std::vector<uint8_t> moov;
     writeU32(moov, 0); // size placeholder
@@ -713,7 +716,7 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     writeU32(mdia, 0); // size placeholder
     mdia.insert(mdia.end(), {'m', 'd', 'i', 'a'});
 
-    // 3.2.2.1 mdhd box
+    // 3.2.2.1 mdhd box - FIXED: consistent timescale
     std::vector<uint8_t> mdhd;
     writeU32(mdhd, 32); // box size
     mdhd.insert(mdhd.end(), {'m', 'd', 'h', 'd'});
@@ -721,8 +724,8 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     writeU8(mdhd, 0); writeU8(mdhd, 0); writeU8(mdhd, 0); // flags
     writeU32(mdhd, 0); // creation_time
     writeU32(mdhd, 0); // modification_time
-    writeU32(mdhd, 9000); // timescale
-    writeU32(mdhd, 9000); // duration
+    writeU32(mdhd, 1000); // timescale (FIXED: same as mvhd)
+    writeU32(mdhd, 1000); // duration (FIXED: same as mvhd)
     writeU16(mdhd, 0x55c4); // language (und)
     writeU16(mdhd, 0); // pre_defined
     
@@ -888,27 +891,38 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     
     stbl.insert(stbl.end(), stsc.begin(), stsc.end());
 
-    // stsz box (sample sizes)
+    // stsz box (sample sizes) - FIXED: correct sample count and size
     std::vector<uint8_t> stsz;
-    writeU32(stsz, 20); // box size
+    writeU32(stsz, 24); // box size (FIXED: 20 + 4 bytes for one sample)
     stsz.insert(stsz.end(), {'s', 't', 's', 'z'});
     writeU8(stsz, 0); // version
     writeU8(stsz, 0); writeU8(stsz, 0); writeU8(stsz, 0); // flags
     writeU32(stsz, 0); // sample_size (0 = variable sizes)
-    writeU32(stsz, 0); // sample_count
+    writeU32(stsz, 1); // sample_count (FIXED: was 0)
+    
+    // Calculate total sample size (SPS + PPS + H264 with length prefixes)
+    uint32_t totalSampleSize = 4 + sps.size() + 4 + pps.size() + 4 + dataSize;
+    writeU32(stsz, totalSampleSize);
     
     stbl.insert(stbl.end(), stsz.begin(), stsz.end());
 
-    // Chunk offset table (stco)
+    // stco box (chunk offsets) - FIXED: correct offset calculation
     std::vector<uint8_t> stco;
     writeU32(stco, 20); // box size
     stco.insert(stco.end(), {'s', 't', 'c', 'o'});
     writeU8(stco, 0); // version
     writeU8(stco, 0); writeU8(stco, 0); writeU8(stco, 0); // flags
     writeU32(stco, 1); // entry_count
-    writeU32(stco, 40); // chunk_offset (placeholder)
+    writeU32(stco, mdatDataOffset); // chunk_offset (FIXED: real offset to data)
     
     stbl.insert(stbl.end(), stco.begin(), stco.end());
+
+    // Update stbl size
+    uint32_t stblSize = stbl.size();
+    stbl[0] = (stblSize >> 24) & 0xFF;
+    stbl[1] = (stblSize >> 16) & 0xFF;
+    stbl[2] = (stblSize >> 8) & 0xFF;
+    stbl[3] = stblSize & 0xFF;
 
     // Add stbl to minf
     minf.insert(minf.end(), stbl.begin(), stbl.end());
@@ -943,13 +957,10 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     // Add trak to moov
     moov.insert(moov.end(), trak.begin(), trak.end());
 
-    // Update moov size
+    // Update moov size - FIXED: remove duplicate lines
     uint32_t moovSize = moov.size();
     moov[0] = (moovSize >> 24) & 0xFF;
     moov[1] = (moovSize >> 16) & 0xFF;
-    moov[2] = (moovSize >> 8) & 0xFF;
-    moov[3] = moovSize & 0xFF;
-    
     moov[2] = (moovSize >> 8) & 0xFF;
     moov[3] = moovSize & 0xFF;
     
