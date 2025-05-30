@@ -26,10 +26,19 @@
 // ---------------------------------
 
 H264_V4L2DeviceSource::~H264_V4L2DeviceSource() {
-	// Finalize MP4 muxer if active
+	// CRITICAL: Finalize MP4 BEFORE closing file descriptor
 	if (m_mp4Muxer && m_mp4Muxer->isInitialized()) {
+		LOG(INFO) << "[H264_V4l2DeviceSource] Finalizing MP4 muxer in destructor";
 		m_mp4Muxer->finalize();
 	}
+	
+	// CRITICAL: Also close output file descriptor to trigger data flush
+	if (m_outfd != -1) {
+		LOG(INFO) << "[H264_V4l2DeviceSource] Closing output file descriptor: " << m_outfd;
+		close(m_outfd);
+		m_outfd = -1;
+	}
+	
 	delete m_mp4Muxer;
 }
 
@@ -166,6 +175,20 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 					m_mp4Muxer->addFrame(m_currentFrameData.data(), m_currentFrameData.size(), m_currentFrameIsKeyframe);
 					LOG(DEBUG) << "Added frame to MP4 stream: " << m_currentFrameData.size() 
 					          << " bytes" << (m_currentFrameIsKeyframe ? " (keyframe)" : "");
+					
+					// CRITICAL: Periodic finalization to prevent data loss
+					static int frameCounter = 0;
+					frameCounter++;
+					if (frameCounter % 50 == 0) {
+						LOG(INFO) << "[MP4Muxer] Periodic finalization after " << frameCounter << " frames";
+						m_mp4Muxer->finalize();
+						// Re-initialize for continued streaming
+						if (!m_mp4Muxer->initialize(m_outfd, m_sps, m_pps, 
+								(m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920,
+								(m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080)) {
+							LOG(ERROR) << "Failed to re-initialize MP4 muxer after periodic finalization";
+						}
+					}
 				}
 			} else if (!m_mp4Muxer) {
 				// If muxer not ready, write raw H264 as fallback
