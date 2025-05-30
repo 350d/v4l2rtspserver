@@ -11,6 +11,7 @@
 
 #include <sstream>
 #include <vector>
+#include <signal.h>
 
 // live555
 #include <Base64.hh>
@@ -20,6 +21,9 @@
 #include "H264_V4l2DeviceSource.h"
 #include "SnapshotManager.h"
 #include "MP4Muxer.h"
+
+// Simple finalization on exit for MP4 files
+static bool g_forceFinalize = false;
 
 // ---------------------------------
 // H264 V4L2 FramedSource
