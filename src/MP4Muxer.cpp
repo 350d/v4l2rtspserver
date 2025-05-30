@@ -640,7 +640,7 @@ bool MP4Muxer::writeMP4Header() {
     
     // Reserve space for moov (estimate ~16KB for multi-frame videos)
     std::vector<uint8_t> placeholderMoov(16384, 0); // 16KB placeholder
-    // Write minimal moov header
+    // Write minimal moov header (size first, then type)
     placeholderMoov[0] = (16384 >> 24) & 0xFF;
     placeholderMoov[1] = (16384 >> 16) & 0xFF; 
     placeholderMoov[2] = (16384 >> 8) & 0xFF;
