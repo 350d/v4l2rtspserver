@@ -28,7 +28,7 @@ public:
     ~MP4Muxer();
     
     // Initialize MP4 file with SPS/PPS and dimensions
-    bool initialize(int fd, const std::string& sps, const std::string& pps, int width, int height);
+    bool initialize(int fd, const std::string& sps, const std::string& pps, int width, int height, int fps = 30);
     
     // Add H264 frame (will handle keyframes and regular frames)
     bool addFrame(const unsigned char* h264Data, size_t dataSize, bool isKeyFrame);
@@ -42,7 +42,7 @@ public:
     // Static method for creating MP4 snapshot in memory (for SnapshotManager)
     static std::vector<uint8_t> createMP4Snapshot(const unsigned char* h264Data, size_t dataSize,
                                                    const std::string& sps, const std::string& pps,
-                                                   int width, int height);
+                                                   int width, int height, int fps = 30);
     
     // Static debug method for H264 data analysis
     static void debugDumpH264Data(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps, 
@@ -59,6 +59,7 @@ private:
     std::string m_pps;
     int m_width;
     int m_height;
+    int m_fps;  // Dynamic FPS parameter
     
     // Track file positions for metadata updates
     size_t m_mdatStartPos;
@@ -81,7 +82,7 @@ private:
     static std::vector<uint8_t> createFtypBox();
     static std::vector<uint8_t> createMinimalMoovBox();
     static std::vector<uint8_t> createVideoTrackMoovBox(const std::string& sps, const std::string& pps, 
-                                                       int width, int height);
+                                                       int width, int height, int fps, uint32_t frameCount);
     static std::vector<uint8_t> createMdatBox(const std::string& sps, const std::string& pps, 
                                               const unsigned char* h264Data, size_t dataSize);
     

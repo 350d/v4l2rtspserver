@@ -157,14 +157,15 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 				m_mp4Muxer = new MP4Muxer();
 				int frameWidth = (m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920;
 				int frameHeight = (m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080;
+				int frameFps = (m_device && m_device->getFps() > 0) ? m_device->getFps() : 30;  // Get FPS from camera
 				
-				if (!m_mp4Muxer->initialize(m_outfd, m_sps, m_pps, frameWidth, frameHeight)) {
+				if (!m_mp4Muxer->initialize(m_outfd, m_sps, m_pps, frameWidth, frameHeight, frameFps)) {
 					LOG(ERROR) << "Failed to initialize MP4 muxer for streaming";
 					delete m_mp4Muxer;
 					m_mp4Muxer = nullptr;
 					m_isMP4 = false; // Fall back to raw H264
 				} else {
-					LOG(INFO) << "MP4 streaming muxer initialized successfully";
+					LOG(INFO) << "MP4 streaming muxer initialized successfully with FPS: " << frameFps;
 				}
 			}
 			
@@ -183,9 +184,10 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 						LOG(INFO) << "[MP4Muxer] Periodic finalization after " << frameCounter << " frames";
 						m_mp4Muxer->finalize();
 						// Re-initialize for continued streaming
+						int frameFps = (m_device && m_device->getFps() > 0) ? m_device->getFps() : 30;  // Get FPS from camera
 						if (!m_mp4Muxer->initialize(m_outfd, m_sps, m_pps, 
 								(m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920,
-								(m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080)) {
+								(m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080, frameFps)) {
 							LOG(ERROR) << "Failed to re-initialize MP4 muxer after periodic finalization";
 						}
 					}
