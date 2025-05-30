@@ -594,6 +594,7 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     
     if (!h264Data || dataSize == 0 || sps.empty() || pps.empty() || width <= 0 || height <= 0) {
         LOG(ERROR) << "[MP4Muxer] Invalid parameters for MP4 snapshot creation";
+        return mp4Data;
     }
     
     LOG(DEBUG) << "[MP4Muxer] Creating MP4 snapshot: " << dataSize << " bytes, " << width << "x" << height;
