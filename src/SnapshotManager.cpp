@@ -885,6 +885,9 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         
         LOG(INFO) << "[H264] Complete MP4 snapshot created: " << mp4Data.size() << " bytes (" << width << "x" << height << ")";
     }
+    
+    // Auto-save snapshot if file path is configured
+    autoSaveSnapshot();
 }
 
 bool SnapshotManager::getSnapshot(std::vector<unsigned char>& jpegData) {
@@ -1022,10 +1025,16 @@ void SnapshotManager::autoSaveSnapshot() {
     std::vector<unsigned char> dataToSave;
     {
         std::lock_guard<std::mutex> lock(m_snapshotMutex);
-        dataToSave = m_currentSnapshot;
+        // Use snapshotData (MP4) if available, otherwise fallback to currentSnapshot (JPEG)
+        if (!m_snapshotData.empty()) {
+            dataToSave = m_snapshotData;
+        } else {
+            dataToSave = m_currentSnapshot;
+        }
     }
     
     if (dataToSave.empty()) {
+        LOG(DEBUG) << "No snapshot data available for auto-save";
         return;
     }
     
@@ -1036,7 +1045,7 @@ void SnapshotManager::autoSaveSnapshot() {
             file.close();
             if (file.good()) {
                 m_lastSaveTime = now; // Update save time only on successful save
-                LOG(DEBUG) << "Auto-saved snapshot: " << m_filePath << " (" << dataToSave.size() << " bytes)";
+                LOG(NOTICE) << "Auto-saved snapshot: " << m_filePath << " (" << dataToSave.size() << " bytes)";
             } else {
                 LOG(ERROR) << "Error writing snapshot to file: " << m_filePath;
             }
