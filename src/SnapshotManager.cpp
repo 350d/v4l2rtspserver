@@ -1562,25 +1562,137 @@ void SnapshotManager::writeMP4ToFile(int fd, const unsigned char* h264Data, size
         return;
     }
     
-    // Check if we need to write MP4 header (for new files)
-    static bool headerWritten = false;
-    if (!headerWritten) {
-        // Use existing MP4 creation logic from createH264Snapshot
-        std::vector<unsigned char> mp4Data;
-        
-        // Auto-detect dimensions from SPS
-        int width = 1920, height = 1080;
-        parseSPSDimensions(sps, width, height);
-        
-        // Create complete MP4 structure
-        createCompleteMP4(mp4Data, h264Data, dataSize, sps, pps, width, height);
-        
-        // Write MP4 data to file
-        if (write(fd, mp4Data.data(), mp4Data.size()) != (ssize_t)mp4Data.size()) {
-            LOG(WARN) << "Failed to write MP4 data to file: " << strerror(errno);
+    // Auto-detect dimensions from SPS
+    int width = 1920, height = 1080;
+    std::pair<int, int> detectedDims = parseSPSDimensions(sps);
+    width = detectedDims.first;
+    height = detectedDims.second;
+    
+    LOG(DEBUG) << "[writeMP4ToFile] Creating MP4 with dimensions: " << width << "x" << height;
+    
+    // Use the same MP4 creation logic as createH264Snapshot
+    std::vector<uint8_t> mp4Data;
+    
+    // 1. ftyp box
+    std::vector<uint8_t> ftyp;
+    write32(ftyp, 0); // size placeholder
+    ftyp.insert(ftyp.end(), {'f', 't', 'y', 'p'});
+    ftyp.insert(ftyp.end(), {'i', 's', 'o', 'm'}); // major brand
+    write32(ftyp, 0x200); // minor version
+    ftyp.insert(ftyp.end(), {'i', 's', 'o', 'm'}); // compatible brands
+    ftyp.insert(ftyp.end(), {'a', 'v', 'c', '1'});
+    ftyp.insert(ftyp.end(), {'m', 'p', '4', '1'});
+    
+    // Update ftyp size
+    uint32_t ftypSize = ftyp.size();
+    ftyp[0] = (ftypSize >> 24) & 0xFF;
+    ftyp[1] = (ftypSize >> 16) & 0xFF;
+    ftyp[2] = (ftypSize >> 8) & 0xFF;
+    ftyp[3] = ftypSize & 0xFF;
+    
+    // 2. mdat box with H264 data (convert from Annex B to length-prefixed)
+    std::vector<uint8_t> mdat;
+    write32(mdat, 0); // size placeholder
+    mdat.insert(mdat.end(), {'m', 'd', 'a', 't'});
+    
+    // Convert Annex B NAL units to length-prefixed format
+    const unsigned char* ptr = h264Data;
+    size_t remaining = dataSize;
+    
+    while (remaining > 4) {
+        // Look for start codes (0x00000001 or 0x000001)
+        if ((ptr[0] == 0x00 && ptr[1] == 0x00 && ptr[2] == 0x00 && ptr[3] == 0x01)) {
+            ptr += 4;
+            remaining -= 4;
+        } else if (ptr[0] == 0x00 && ptr[1] == 0x00 && ptr[2] == 0x01) {
+            ptr += 3;
+            remaining -= 3;
         } else {
-            LOG(INFO) << "MP4 snapshot written to file: " << mp4Data.size() << " bytes";
-            headerWritten = true;
+            ptr++;
+            remaining--;
+            continue;
         }
+        
+        // Find next start code to determine NAL unit length
+        const unsigned char* nalStart = ptr;
+        size_t nalLength = 0;
+        
+        while (nalLength < remaining) {
+            if (nalLength + 4 <= remaining && 
+                ptr[nalLength] == 0x00 && ptr[nalLength+1] == 0x00 && 
+                ptr[nalLength+2] == 0x00 && ptr[nalLength+3] == 0x01) {
+                break;
+            }
+            if (nalLength + 3 <= remaining && 
+                ptr[nalLength] == 0x00 && ptr[nalLength+1] == 0x00 && 
+                ptr[nalLength+2] == 0x01) {
+                break;
+            }
+            nalLength++;
+        }
+        
+        if (nalLength > 0) {
+            // Write length-prefixed NAL unit
+            write32(mdat, nalLength);
+            mdat.insert(mdat.end(), nalStart, nalStart + nalLength);
+        }
+        
+        ptr += nalLength;
+        remaining -= nalLength;
     }
+    
+    // Update mdat size
+    uint32_t mdatSize = mdat.size();
+    mdat[0] = (mdatSize >> 24) & 0xFF;
+    mdat[1] = (mdatSize >> 16) & 0xFF;
+    mdat[2] = (mdatSize >> 8) & 0xFF;
+    mdat[3] = mdatSize & 0xFF;
+    
+    // 3. Create simplified moov box
+    std::vector<uint8_t> moov;
+    write32(moov, 0); // size placeholder
+    moov.insert(moov.end(), {'m', 'o', 'o', 'v'});
+    
+    // Simple mvhd box
+    std::vector<uint8_t> mvhd;
+    write32(mvhd, 108); // box size
+    mvhd.insert(mvhd.end(), {'m', 'v', 'h', 'd'});
+    mvhd.insert(mvhd.end(), {0, 0, 0, 0}); // version + flags
+    write32(mvhd, 0); // creation_time
+    write32(mvhd, 0); // modification_time
+    write32(mvhd, 1000); // timescale
+    write32(mvhd, 1000); // duration (1 second)
+    write32(mvhd, 0x00010000); // rate
+    write16(mvhd, 0x0100); // volume
+    write16(mvhd, 0); // reserved
+    write32(mvhd, 0); write32(mvhd, 0); // reserved
+    // Matrix
+    for (int i = 0; i < 9; i++) {
+        write32(mvhd, i == 0 || i == 4 || i == 8 ? 0x00010000 : 0);
+    }
+    // Pre-defined
+    for (int i = 0; i < 6; i++) write32(mvhd, 0);
+    write32(mvhd, 2); // next_track_ID
+    
+    moov.insert(moov.end(), mvhd.begin(), mvhd.end());
+    
+    // Update moov size
+    uint32_t moovSize = moov.size();
+    moov[0] = (moovSize >> 24) & 0xFF;
+    moov[1] = (moovSize >> 16) & 0xFF;
+    moov[2] = (moovSize >> 8) & 0xFF;
+    moov[3] = moovSize & 0xFF;
+    
+    // Combine all boxes
+    mp4Data.insert(mp4Data.end(), ftyp.begin(), ftyp.end());
+    mp4Data.insert(mp4Data.end(), mdat.begin(), mdat.end());
+    mp4Data.insert(mp4Data.end(), moov.begin(), moov.end());
+    
+    // Write MP4 data to file
+    if (write(fd, mp4Data.data(), mp4Data.size()) != (ssize_t)mp4Data.size()) {
+        LOG(WARN) << "Failed to write MP4 data to file: " << strerror(errno);
+        return;
+    }
+    
+    LOG(DEBUG) << "[writeMP4ToFile] Successfully wrote " << mp4Data.size() << " bytes MP4 data to file";
 }
