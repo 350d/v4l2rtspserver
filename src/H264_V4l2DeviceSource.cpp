@@ -41,6 +41,7 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	
 	// For proper H264 output file writing
 	std::vector<unsigned char> outputBuffer;
+	std::vector<unsigned char> idrFrameOnly; // For MP4: only IDR frame without SPS/PPS
 	bool hasKeyFrame = false;
 	
 	while (buffer != NULL)				
@@ -117,9 +118,13 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	// Write properly formatted H264 data to output file
 	if (m_outfd != -1 && !outputBuffer.empty()) {
 		if (m_isMP4) {
-			// MP4 format - use snapshot manager for proper MP4 writing
-			if (hasKeyFrame && !m_sps.empty() && !m_pps.empty()) {
-				SnapshotManager::getInstance().writeMP4ToFile(m_outfd, outputBuffer.data(), outputBuffer.size(), m_sps, m_pps);
+			// MP4 format - write raw H264 stream for now, MP4 muxing will be done at the end
+			// This prevents constant file rewriting and memory issues
+			int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
+			if (written != (int)outputBuffer.size()) {
+				LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
+			} else if (hasKeyFrame) {
+				LOG(DEBUG) << "H264 keyframe written to MP4 output: " << written << " bytes";
 			}
 		} else {
 			// Raw H264 format
