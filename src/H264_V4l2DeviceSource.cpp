@@ -35,7 +35,7 @@ H264_V4L2DeviceSource::~H264_V4L2DeviceSource() {
 	// CRITICAL: Also close output file descriptor to trigger data flush
 	if (m_outfd != -1) {
 		LOG(INFO) << "[H264_V4l2DeviceSource] Closing output file descriptor: " << m_outfd;
-		close(m_outfd);
+		::close(m_outfd);
 		m_outfd = -1;
 	}
 	
