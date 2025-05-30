@@ -619,11 +619,7 @@ bool MP4Muxer::writeMP4Header() {
     std::vector<uint8_t> ftyp = createFtypBox();
     mp4Header.insert(mp4Header.end(), ftyp.begin(), ftyp.end());
 
-    // 2. Minimal moov box (for compatibility)
-    std::vector<uint8_t> moov = createMinimalMoovBox();
-    mp4Header.insert(mp4Header.end(), moov.begin(), moov.end());
-
-    // 3. Start mdat box (data will be appended here)
+    // 2. Start mdat box (data will be appended here) - NO minimal moov!
     m_mdatStartPos = mp4Header.size();
     write32(mp4Header, 0xFFFFFFFF); // Use extended size (indicates streaming)
     mp4Header.insert(mp4Header.end(), {'m', 'd', 'a', 't'});
@@ -631,7 +627,7 @@ bool MP4Muxer::writeMP4Header() {
     // Write header to file
     writeToFile(mp4Header.data(), mp4Header.size());
     
-    LOG(INFO) << "[MP4Muxer] MP4 header written: " << mp4Header.size() << " bytes";
+    LOG(INFO) << "[MP4Muxer] MP4 header written: " << mp4Header.size() << " bytes (ftyp + mdat start)";
     return true;
 }
 
