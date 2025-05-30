@@ -14,6 +14,11 @@
 #include "../libv4l2cpp/inc/logger.h"
 #include <unistd.h>
 #include <cstring>
+#include <sstream>
+#include <iomanip>
+#include <fstream>
+#include <chrono>
+#include <ctime>
 
 MP4Muxer::MP4Muxer() 
     : m_fd(-1), m_initialized(false), m_width(0), m_height(0),
@@ -302,4 +307,158 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     
     LOG(DEBUG) << "[MP4Muxer] MP4 snapshot created: " << mp4Data.size() << " bytes";
     return mp4Data;
+}
+
+// Static debug method for H264 data analysis (moved from SnapshotManager)
+void MP4Muxer::debugDumpH264Data(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps, 
+                                  const std::vector<uint8_t>& h264Data, int width, int height) {
+#ifdef DEBUG_DUMP_H264_DATA
+    LOG(INFO) << "[MP4Debug] Dumping H264 data for analysis";
+    LOG(INFO) << "[DATA] Input data sizes - SPS: " << sps.size() 
+              << ", PPS: " << pps.size() 
+              << ", H264: " << h264Data.size();
+    LOG(INFO) << "[VIDEO] Frame dimensions: " << width << "x" << height;
+
+    // Create dump files for debugging
+    static int dumpCounter = 0;
+    dumpCounter++;
+    
+    std::string dumpPrefix = "tmp/mp4_debug_dump_" + std::to_string(dumpCounter);
+    
+    // Dump SPS data
+    if (!sps.empty()) {
+        std::string spsFile = dumpPrefix + "_sps.bin";
+        std::ofstream spsOut(spsFile, std::ios::binary);
+        if (spsOut.is_open()) {
+            spsOut.write(reinterpret_cast<const char*>(sps.data()), sps.size());
+            spsOut.close();
+            LOG(INFO) << "[MP4Debug] SPS dumped to: " << spsFile;
+            
+            // Log SPS hex data
+            std::stringstream spsHex;
+            for (size_t i = 0; i < std::min((size_t)32, sps.size()); i++) {
+                spsHex << std::hex << std::setfill('0') << std::setw(2) 
+                       << (int)sps[i] << " ";
+            }
+            LOG(INFO) << "[HEX] SPS data (first 32 bytes): " << spsHex.str();
+        }
+    }
+    
+    // Dump PPS data
+    if (!pps.empty()) {
+        std::string ppsFile = dumpPrefix + "_pps.bin";
+        std::ofstream ppsOut(ppsFile, std::ios::binary);
+        if (ppsOut.is_open()) {
+            ppsOut.write(reinterpret_cast<const char*>(pps.data()), pps.size());
+            ppsOut.close();
+            LOG(INFO) << "[MP4Debug] PPS dumped to: " << ppsFile;
+            
+            // Log PPS hex data
+            std::stringstream ppsHex;
+            for (size_t i = 0; i < std::min((size_t)16, pps.size()); i++) {
+                ppsHex << std::hex << std::setfill('0') << std::setw(2) 
+                       << (int)pps[i] << " ";
+            }
+            LOG(INFO) << "[HEX] PPS data: " << ppsHex.str();
+        }
+    }
+    
+    // Dump H264 frame data
+    if (!h264Data.empty()) {
+        std::string h264File = dumpPrefix + "_h264_frame.bin";
+        std::ofstream h264Out(h264File, std::ios::binary);
+        if (h264Out.is_open()) {
+            h264Out.write(reinterpret_cast<const char*>(h264Data.data()), h264Data.size());
+            h264Out.close();
+            LOG(INFO) << "[MP4Debug] H264 frame dumped to: " << h264File;
+            
+            // Log H264 frame start
+            std::stringstream h264Hex;
+            for (size_t i = 0; i < std::min((size_t)32, h264Data.size()); i++) {
+                h264Hex << std::hex << std::setfill('0') << std::setw(2) 
+                        << (int)h264Data[i] << " ";
+            }
+            LOG(INFO) << "[HEX] H264 frame start: " << h264Hex.str();
+            
+            // Analyze NAL unit type
+            if (h264Data.size() >= 4) {
+                // Look for start codes and NAL units
+                for (size_t i = 0; i < h264Data.size() - 4; i++) {
+                    if (h264Data[i] == 0x00 && h264Data[i+1] == 0x00 && 
+                        h264Data[i+2] == 0x00 && h264Data[i+3] == 0x01) {
+                        if (i + 4 < h264Data.size()) {
+                            uint8_t nalType = h264Data[i+4] & 0x1F;
+                            LOG(INFO) << "[NAL] Found NAL unit at offset " << i 
+                                      << ", type: " << (int)nalType 
+                                      << " (" << getNALTypeName(nalType) << ")";
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Create comprehensive debug info file
+    std::string debugFile = dumpPrefix + "_debug_info.txt";
+    std::ofstream debugOut(debugFile);
+    if (debugOut.is_open()) {
+        debugOut << "H264 MP4 Data Debug Information\n";
+        debugOut << "===============================\n\n";
+        debugOut << "Timestamp: " << getCurrentTimestamp() << "\n";
+        debugOut << "Frame dimensions: " << width << "x" << height << "\n\n";
+        
+        debugOut << "Data sizes:\n";
+        debugOut << "- SPS: " << sps.size() << " bytes\n";
+        debugOut << "- PPS: " << pps.size() << " bytes\n";
+        debugOut << "- H264: " << h264Data.size() << " bytes\n\n";
+        
+        if (!sps.empty()) {
+            debugOut << "SPS Analysis:\n";
+            if (sps.size() >= 4) {
+                debugOut << "- Profile: 0x" << std::hex << (int)sps[1] << std::dec << "\n";
+                debugOut << "- Constraints: 0x" << std::hex << (int)sps[2] << std::dec << "\n";
+                debugOut << "- Level: 0x" << std::hex << (int)sps[3] << std::dec << "\n";
+            }
+            debugOut << "- Size: " << sps.size() << " bytes\n";
+        }
+        
+        debugOut.close();
+        LOG(INFO) << "[MP4Debug] Debug info saved to: " << debugFile;
+    }
+#else
+    // Silent when debug is disabled - avoid unused parameter warnings
+    (void)sps;
+    (void)pps;
+    (void)h264Data;
+    (void)width;
+    (void)height;
+#endif
+}
+
+// Helper static method for NAL type names (moved from SnapshotManager)
+std::string MP4Muxer::getNALTypeName(uint8_t nalType) {
+    switch (nalType) {
+        case 1: return "Non-IDR slice";
+        case 2: return "Slice data partition A";
+        case 3: return "Slice data partition B";
+        case 4: return "Slice data partition C";
+        case 5: return "IDR slice";
+        case 6: return "SEI";
+        case 7: return "SPS";
+        case 8: return "PPS";
+        case 9: return "Access unit delimiter";
+        case 10: return "End of sequence";
+        case 11: return "End of stream";
+        case 12: return "Filler data";
+        default: return "Unknown";
+    }
+}
+
+// Helper static method for timestamp (moved from SnapshotManager)
+std::string MP4Muxer::getCurrentTimestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+    return ss.str();
 } 

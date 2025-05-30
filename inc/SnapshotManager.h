@@ -82,10 +82,6 @@ public:
     std::string v4l2FormatToPixelFormat(unsigned int v4l2Format);
     std::string v4l2FormatToString(unsigned int v4l2Format);
 
-    // Debug helper functions
-    std::string getNALTypeName(uint8_t nalType);
-    std::string getCurrentTimestamp();
-
     // Enhanced dumping methods
     static void dumpDeviceInfo(const std::string& device, int width, int height, 
                               int pixelFormat, int fps);
@@ -118,10 +114,6 @@ private:
     
     // Dynamic NAL unit extraction (inspired by go2rtc)
     std::vector<uint8_t> findNALUnit(const uint8_t* data, size_t size, uint8_t nalType);
-    
-    // Debug dump functionality
-    void debugDumpH264Data(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps, 
-                          const std::vector<uint8_t>& h264Data, int width, int height);
     
     // Members
     bool m_enabled;

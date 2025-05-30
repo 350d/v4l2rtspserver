@@ -37,6 +37,14 @@ public:
                                                    const std::string& sps, const std::string& pps,
                                                    int width, int height);
     
+    // Static debug method for H264 data analysis
+    static void debugDumpH264Data(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps, 
+                                  const std::vector<uint8_t>& h264Data, int width, int height);
+    
+    // Helper static methods for NAL analysis
+    static std::string getNALTypeName(uint8_t nalType);
+    static std::string getCurrentTimestamp();
+    
 private:
     int m_fd;
     bool m_initialized;
