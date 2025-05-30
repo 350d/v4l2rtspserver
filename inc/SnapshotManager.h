@@ -72,6 +72,8 @@ public:
     // File operations
     bool saveSnapshotToFile();
     bool saveSnapshotToFile(const std::string& filePath);
+    void writeMP4ToFile(int fd, const unsigned char* h264Data, size_t dataSize, 
+                       const std::string& sps, const std::string& pps);
     
     // Status
     SnapshotMode getMode() const { return m_mode; }

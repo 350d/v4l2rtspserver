@@ -116,11 +116,19 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	
 	// Write properly formatted H264 data to output file
 	if (m_outfd != -1 && !outputBuffer.empty()) {
-		int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
-		if (written != (int)outputBuffer.size()) {
-			LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
-		} else if (hasKeyFrame) {
-			LOG(DEBUG) << "H264 keyframe written to output: " << written << " bytes";
+		if (m_isMP4) {
+			// MP4 format - use snapshot manager for proper MP4 writing
+			if (hasKeyFrame && !m_sps.empty() && !m_pps.empty()) {
+				SnapshotManager::getInstance().writeMP4ToFile(m_outfd, outputBuffer.data(), outputBuffer.size(), m_sps, m_pps);
+			}
+		} else {
+			// Raw H264 format
+			int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
+			if (written != (int)outputBuffer.size()) {
+				LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
+			} else if (hasKeyFrame) {
+				LOG(DEBUG) << "H264 keyframe written to output: " << written << " bytes";
+			}
 		}
 	}
 	

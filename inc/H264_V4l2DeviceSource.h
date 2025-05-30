@@ -25,13 +25,13 @@ class MP4Muxer; // Forward declaration
 class H264_V4L2DeviceSource : public H26X_V4L2DeviceSource
 {
 	public:				
-		static H264_V4L2DeviceSource* createNew(UsageEnvironment& env, DeviceInterface * device, int outputFd, unsigned int queueSize, CaptureMode captureMode, bool repeatConfig, bool keepMarker) {
-			return new H264_V4L2DeviceSource(env, device, outputFd, queueSize, captureMode, repeatConfig, keepMarker);
+		static H264_V4L2DeviceSource* createNew(UsageEnvironment& env, DeviceInterface * device, int outputFd, unsigned int queueSize, CaptureMode captureMode, bool repeatConfig, bool keepMarker, bool isMP4 = false) {
+			return new H264_V4L2DeviceSource(env, device, outputFd, queueSize, captureMode, repeatConfig, keepMarker, isMP4);
 		}
 
 	protected:
-		H264_V4L2DeviceSource(UsageEnvironment& env, DeviceInterface * device, int outputFd, unsigned int queueSize, CaptureMode captureMode, bool repeatConfig, bool keepMarker) 
-			: H26X_V4L2DeviceSource(env, device, outputFd, queueSize, captureMode, repeatConfig, keepMarker), m_mp4Muxer(nullptr) {
+		H264_V4L2DeviceSource(UsageEnvironment& env, DeviceInterface * device, int outputFd, unsigned int queueSize, CaptureMode captureMode, bool repeatConfig, bool keepMarker, bool isMP4 = false) 
+			: H26X_V4L2DeviceSource(env, device, outputFd, queueSize, captureMode, repeatConfig, keepMarker), m_mp4Muxer(nullptr), m_isMP4(isMP4) {
 			// Check if output file is MP4 based on file descriptor (simple heuristic)
 			// This could be improved by passing a flag from the caller
 		}
@@ -45,5 +45,6 @@ class H264_V4L2DeviceSource : public H26X_V4L2DeviceSource
 		
 	private:
 		MP4Muxer* m_mp4Muxer;
+		bool m_isMP4;
 		void initMP4MuxerIfNeeded();
 };

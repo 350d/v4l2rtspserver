@@ -1554,3 +1554,33 @@ void SnapshotManager::debugDumpH264Data(const std::vector<uint8_t>& sps, const s
     (void)height;
 #endif
 } 
+
+void SnapshotManager::writeMP4ToFile(int fd, const unsigned char* h264Data, size_t dataSize, 
+                                    const std::string& sps, const std::string& pps) {
+    if (fd == -1 || !h264Data || dataSize == 0 || sps.empty() || pps.empty()) {
+        LOG(WARN) << "Invalid parameters for MP4 file writing";
+        return;
+    }
+    
+    // Check if we need to write MP4 header (for new files)
+    static bool headerWritten = false;
+    if (!headerWritten) {
+        // Use existing MP4 creation logic from createH264Snapshot
+        std::vector<unsigned char> mp4Data;
+        
+        // Auto-detect dimensions from SPS
+        int width = 1920, height = 1080;
+        parseSPSDimensions(sps, width, height);
+        
+        // Create complete MP4 structure
+        createCompleteMP4(mp4Data, h264Data, dataSize, sps, pps, width, height);
+        
+        // Write MP4 data to file
+        if (write(fd, mp4Data.data(), mp4Data.size()) != (ssize_t)mp4Data.size()) {
+            LOG(WARN) << "Failed to write MP4 data to file: " << strerror(errno);
+        } else {
+            LOG(INFO) << "MP4 snapshot written to file: " << mp4Data.size() << " bytes";
+            headerWritten = true;
+        }
+    }
+}

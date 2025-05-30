@@ -14,6 +14,7 @@
 #include <errno.h>
 
 #include <sstream>
+#include <algorithm>
 
 #include "logger.h"
 #include "V4l2Capture.h"
@@ -55,7 +56,9 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 			{
 				// Check if it looks like a V4L2 device path before attempting V4L2 creation
 				bool isV4L2Device = (outputFile.find("/dev/video") == 0);
-				bool isMP4File = (outputFile.substr(outputFile.find_last_of('.') + 1) == "mp4");
+				std::string extension = outputFile.substr(outputFile.find_last_of('.') + 1);
+				std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+				bool isMP4File = (extension == "mp4");
 				
 				if (isV4L2Device) {
 				V4L2DeviceParameters outparam(outputFile.c_str(), videoCapture->getFormat(), videoCapture->getWidth(), videoCapture->getHeight(), 0, ioTypeOut);
@@ -85,7 +88,7 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 				LOG(FATAL) << "No Streaming format supported for device " << videoDev;
 				delete videoCapture;
 			} else {
-				videoReplicator = DeviceSourceFactory::createStreamReplicator(this->env(), videoCapture->getFormat(), new VideoCaptureAccess(videoCapture), queueSize, captureMode, outfd, repeatConfig);
+				videoReplicator = DeviceSourceFactory::createStreamReplicator(this->env(), videoCapture->getFormat(), new VideoCaptureAccess(videoCapture), queueSize, captureMode, outfd, repeatConfig, isMP4File);
 				if (videoReplicator == NULL) 
 				{
 					LOG(FATAL) << "Unable to create source for device " << videoDev;
