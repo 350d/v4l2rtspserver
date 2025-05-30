@@ -108,6 +108,12 @@ bool MP4Muxer::finalize() {
         return false;
     }
     
+    // CRITICAL: Force data to disk immediately
+    if (m_fd != -1) {
+        fsync(m_fd);
+        LOG(INFO) << "[MP4Muxer] Forced data sync to disk";
+    }
+    
     // FIXED version: create proper moov box at the end of file
     if (m_frameCount > 1 && !m_frames.empty()) {
         // Create proper moov box for multiple frames like in createFixedMultiFrameMP4
@@ -115,6 +121,12 @@ bool MP4Muxer::finalize() {
         if (!finalMoov.empty()) {
             writeToFile(finalMoov.data(), finalMoov.size());
             LOG(INFO) << "[MP4Muxer] Written final moov box: " << finalMoov.size() << " bytes";
+            
+            // CRITICAL: Force moov box to disk immediately
+            if (m_fd != -1) {
+                fsync(m_fd);
+                LOG(INFO) << "[MP4Muxer] Forced moov box sync to disk";
+            }
         }
     }
     
@@ -146,6 +158,14 @@ void MP4Muxer::writeToFile(const void* data, size_t size) {
         LOG(ERROR) << "[MP4Muxer] Write failed: " << strerror(errno);
     }
     m_currentPos += size;
+    
+    // CRITICAL: Periodic sync every 10 frames to prevent data loss
+    static int writeCounter = 0;
+    writeCounter++;
+    if (writeCounter % 10 == 0) {
+        fsync(m_fd);
+        LOG(DEBUG) << "[MP4Muxer] Periodic sync after " << writeCounter << " writes";
+    }
 }
 
 // Parse SPS to extract video dimensions (moved from SnapshotManager)

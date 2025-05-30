@@ -23,6 +23,8 @@
 #include <netinet/in.h>
 
 #include <sstream>
+#include <vector>
+#include <list>
 
 // libv4l2
 #ifdef __linux__
@@ -43,12 +45,13 @@
 #include "V4l2RTSPServer.h"
 #include "DeviceSourceFactory.h"
 #include "SnapshotManager.h"
-
+#include "H264_V4l2DeviceSource.h"
 
 // -----------------------------------------
 //    signal handler
 // -----------------------------------------
 char quit = 0;
+
 void sighandler(int n)
 { 
 	printf("SIGINT\n");
