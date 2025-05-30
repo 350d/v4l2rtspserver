@@ -30,12 +30,7 @@ class VideoCaptureAccess : public DeviceInterface
 		virtual unsigned long getBufferSize()                      { return m_device->getBufferSize(); }
 		virtual int getWidth()                                     { return m_device->getWidth(); }
 		virtual int getHeight()                                    { return m_device->getHeight(); }
-		virtual int getFps()                                       { 
-			// V4l2Device stores FPS in m_params.m_fps, but V4l2Access doesn't expose getFps()
-			// We'll extract it from V4l2Device through V4l2Access via a workaround
-			// Return default FPS if cannot access directly
-			return 30; // Default fallback - will be overridden by device parameters in H264_V4l2DeviceSource
-		}
+		virtual int getFps()                                       { return m_device->getFps(); }
 		virtual int getVideoFormat()                               { return m_device->getFormat(); }
 			
 	protected:
