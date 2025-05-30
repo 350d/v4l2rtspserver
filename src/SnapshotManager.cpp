@@ -12,6 +12,7 @@
 #include "../inc/SnapshotManager.h"
 #include "../libv4l2cpp/inc/logger.h"
 #include "../libv4l2cpp/inc/V4l2Capture.h"
+#include "../inc/MP4Muxer.h"
 #include <string>
 #include <vector>
 #include <cstring>
@@ -497,80 +498,13 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     LOG(DEBUG) << "[H264] Creating MP4 snapshot using MP4Muxer - data size:" << h264Size << " dimensions:" << width << "x" << height;
     LOG(DEBUG) << "[H264] SPS size:" << sps.size() << " PPS size:" << pps.size();
 
-    // Use MP4Muxer for efficient MP4 creation instead of duplicating logic
-    // Create a temporary file descriptor for the snapshot
-    std::vector<uint8_t> mp4Data;
+    // Use MP4Muxer for creating the snapshot - NO MORE DUPLICATED LOGIC!
+    std::vector<uint8_t> mp4Data = MP4Muxer::createMP4Snapshot(h264Data, h264Size, sps, pps, width, height);
     
-    // Create in-memory MP4 using MP4Muxer logic (simplified approach)
-    // For snapshot purposes, we still need to create a complete MP4 in memory
-    // This is a hybrid approach - we use MP4Muxer logic but adapt it for snapshot generation
-    
-    // Note: For a complete refactor, SnapshotManager could create actual temporary files
-    // and use MP4Muxer directly, but for minimal changes we'll create the MP4 structure
-    // using a simplified approach that reuses MP4Muxer concepts
-    
-    // Create a simple MP4 structure for snapshot (single keyframe)
-    // ftyp + mdat (with SPS/PPS/Frame) + minimal moov
-    
-    // 1. ftyp box (file type)
-    std::vector<uint8_t> ftyp = {
-        0x00, 0x00, 0x00, 0x20,  // box size (32 bytes)
-        'f', 't', 'y', 'p',       // box type
-        'i', 's', 'o', 'm',       // major brand
-        0x00, 0x00, 0x02, 0x00,   // minor version
-        'i', 's', 'o', 'm',       // compatible brands
-        'i', 's', 'o', '2',
-        'a', 'v', 'c', '1',
-        'm', 'p', '4', '1'
-    };
-    mp4Data.insert(mp4Data.end(), ftyp.begin(), ftyp.end());
-    
-    // 2. mdat box with H.264 data
-    std::vector<uint8_t> mdatData;
-    
-    // Add SPS with length prefix
-    if (!sps.empty()) {
-        uint32_t spsSize = sps.size();
-        mdatData.push_back((spsSize >> 24) & 0xFF);
-        mdatData.push_back((spsSize >> 16) & 0xFF);
-        mdatData.push_back((spsSize >> 8) & 0xFF);
-        mdatData.push_back(spsSize & 0xFF);
-        mdatData.insert(mdatData.end(), sps.begin(), sps.end());
+    if (mp4Data.empty()) {
+        LOG(ERROR) << "[H264] Failed to create MP4 snapshot using MP4Muxer";
+        return;
     }
-    
-    // Add PPS with length prefix
-    if (!pps.empty()) {
-        uint32_t ppsSize = pps.size();
-        mdatData.push_back((ppsSize >> 24) & 0xFF);
-        mdatData.push_back((ppsSize >> 16) & 0xFF);
-        mdatData.push_back((ppsSize >> 8) & 0xFF);
-        mdatData.push_back(ppsSize & 0xFF);
-        mdatData.insert(mdatData.end(), pps.begin(), pps.end());
-    }
-    
-    // Add H264 frame with length prefix
-    uint32_t frameSize = h264Size;
-    mdatData.push_back((frameSize >> 24) & 0xFF);
-    mdatData.push_back((frameSize >> 16) & 0xFF);
-    mdatData.push_back((frameSize >> 8) & 0xFF);
-    mdatData.push_back(frameSize & 0xFF);
-    mdatData.insert(mdatData.end(), h264Data, h264Data + h264Size);
-    
-    // mdat header
-    uint32_t mdatSize = mdatData.size() + 8;
-    mp4Data.push_back((mdatSize >> 24) & 0xFF);
-    mp4Data.push_back((mdatSize >> 16) & 0xFF);
-    mp4Data.push_back((mdatSize >> 8) & 0xFF);
-    mp4Data.push_back(mdatSize & 0xFF);
-    mp4Data.insert(mp4Data.end(), {'m', 'd', 'a', 't'});
-    mp4Data.insert(mp4Data.end(), mdatData.begin(), mdatData.end());
-    
-    // 3. Minimal moov box for compatibility
-    std::vector<uint8_t> moov = {
-        0x00, 0x00, 0x00, 0x08,  // box size (8 bytes)
-        'm', 'o', 'o', 'v'       // box type
-    };
-    mp4Data.insert(mp4Data.end(), moov.begin(), moov.end());
 
     // Store as snapshot
     {
@@ -587,7 +521,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         m_lastFrameWidth = width;
         m_lastFrameHeight = height;
         
-        LOG(INFO) << "[H264] Simplified MP4 snapshot created: " << mp4Data.size() << " bytes (" << width << "x" << height << ")";
+        LOG(INFO) << "[H264] MP4 snapshot created via MP4Muxer: " << mp4Data.size() << " bytes (" << width << "x" << height << ")";
     }
     
     // Auto-save snapshot if file path is configured

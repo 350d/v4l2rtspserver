@@ -229,4 +229,77 @@ bool MP4Muxer::writeMP4Header() {
     
     LOG(INFO) << "[MP4Muxer] MP4 header written: " << mp4Header.size() << " bytes";
     return true;
+}
+
+// Static method for creating MP4 snapshot in memory (used by SnapshotManager)
+std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, size_t dataSize,
+                                                  const std::string& sps, const std::string& pps,
+                                                  int width, int height) {
+    std::vector<uint8_t> mp4Data;
+    
+    if (!h264Data || dataSize == 0 || sps.empty() || pps.empty() || width <= 0 || height <= 0) {
+        LOG(ERROR) << "[MP4Muxer] Invalid parameters for MP4 snapshot creation";
+        return mp4Data;
+    }
+    
+    LOG(DEBUG) << "[MP4Muxer] Creating MP4 snapshot: " << dataSize << " bytes, " << width << "x" << height;
+    
+    // 1. ftyp box (file type) - reusing the same structure as writeMP4Header
+    std::vector<uint8_t> ftyp = {
+        0x00, 0x00, 0x00, 0x20,  // box size (32 bytes)
+        'f', 't', 'y', 'p',       // box type
+        'i', 's', 'o', 'm',       // major brand
+        0x00, 0x00, 0x02, 0x00,   // minor version
+        'i', 's', 'o', 'm',       // compatible brands
+        'i', 's', 'o', '2',
+        'a', 'v', 'c', '1',
+        'm', 'p', '4', '1'
+    };
+    mp4Data.insert(mp4Data.end(), ftyp.begin(), ftyp.end());
+    
+    // 2. mdat box with H.264 data (using length-prefixed format like in addFrame)
+    std::vector<uint8_t> mdatData;
+    
+    // Add SPS with length prefix
+    uint32_t spsSize = sps.size();
+    mdatData.push_back((spsSize >> 24) & 0xFF);
+    mdatData.push_back((spsSize >> 16) & 0xFF);
+    mdatData.push_back((spsSize >> 8) & 0xFF);
+    mdatData.push_back(spsSize & 0xFF);
+    mdatData.insert(mdatData.end(), sps.begin(), sps.end());
+    
+    // Add PPS with length prefix
+    uint32_t ppsSize = pps.size();
+    mdatData.push_back((ppsSize >> 24) & 0xFF);
+    mdatData.push_back((ppsSize >> 16) & 0xFF);
+    mdatData.push_back((ppsSize >> 8) & 0xFF);
+    mdatData.push_back(ppsSize & 0xFF);
+    mdatData.insert(mdatData.end(), pps.begin(), pps.end());
+    
+    // Add H264 frame with length prefix
+    uint32_t frameSize = dataSize;
+    mdatData.push_back((frameSize >> 24) & 0xFF);
+    mdatData.push_back((frameSize >> 16) & 0xFF);
+    mdatData.push_back((frameSize >> 8) & 0xFF);
+    mdatData.push_back(frameSize & 0xFF);
+    mdatData.insert(mdatData.end(), h264Data, h264Data + dataSize);
+    
+    // mdat header
+    uint32_t mdatSize = mdatData.size() + 8;
+    mp4Data.push_back((mdatSize >> 24) & 0xFF);
+    mp4Data.push_back((mdatSize >> 16) & 0xFF);
+    mp4Data.push_back((mdatSize >> 8) & 0xFF);
+    mp4Data.push_back(mdatSize & 0xFF);
+    mp4Data.insert(mp4Data.end(), {'m', 'd', 'a', 't'});
+    mp4Data.insert(mp4Data.end(), mdatData.begin(), mdatData.end());
+    
+    // 3. Minimal moov box for compatibility (minimal structure for snapshots)
+    std::vector<uint8_t> moov = {
+        0x00, 0x00, 0x00, 0x08,  // box size (8 bytes)
+        'm', 'o', 'o', 'v'       // box type
+    };
+    mp4Data.insert(mp4Data.end(), moov.begin(), moov.end());
+    
+    LOG(DEBUG) << "[MP4Muxer] MP4 snapshot created: " << mp4Data.size() << " bytes";
+    return mp4Data;
 } 
