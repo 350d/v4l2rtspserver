@@ -51,6 +51,7 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 			);
 			
 			int outfd = -1;
+			bool isMP4File = false; // Initialize to false by default
 			
 			if (!outputFile.empty())
 			{
@@ -58,7 +59,7 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 				bool isV4L2Device = (outputFile.find("/dev/video") == 0);
 				std::string extension = outputFile.substr(outputFile.find_last_of('.') + 1);
 				std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-				bool isMP4File = (extension == "mp4");
+				isMP4File = (extension == "mp4");
 				
 				if (isV4L2Device) {
 				V4L2DeviceParameters outparam(outputFile.c_str(), videoCapture->getFormat(), videoCapture->getWidth(), videoCapture->getHeight(), 0, ioTypeOut);
