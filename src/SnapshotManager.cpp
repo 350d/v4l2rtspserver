@@ -494,6 +494,18 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         LOG(WARN) << "[H264] Snapshot creation skipped - enabled:" << m_enabled << " data:" << (h264Data ? "valid" : "null") << " size:" << h264Size;
         return;
     }
+    
+    // Auto-detect dimensions from SPS if available, otherwise use provided dimensions
+    std::pair<int, int> detectedDims = {width, height};
+    if (!sps.empty()) {
+        detectedDims = parseSPSDimensions(sps);
+        if (detectedDims.first != width || detectedDims.second != height) {
+            LOG(INFO) << "[H264] SPS auto-detected dimensions: " << detectedDims.first << "x" << detectedDims.second 
+                      << " (provided: " << width << "x" << height << ")";
+            width = detectedDims.first;
+            height = detectedDims.second;
+        }
+    }
 
     LOG(DEBUG) << "[H264] Creating MP4 snapshot using MP4Muxer - data size:" << h264Size << " dimensions:" << width << "x" << height;
     LOG(DEBUG) << "[H264] SPS size:" << sps.size() << " PPS size:" << pps.size();
@@ -505,7 +517,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         LOG(ERROR) << "[H264] Failed to create MP4 snapshot using MP4Muxer";
         return;
     }
-    
+
     // Store as snapshot
     {
     std::lock_guard<std::mutex> lock(m_snapshotMutex);

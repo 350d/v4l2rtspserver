@@ -15,6 +15,13 @@
 #include <vector>
 #include <cstdint>
 
+// Structure for storing frame information
+struct FrameInfo {
+    size_t offset;      // position in file
+    size_t size;        // frame size (including length prefix)
+    bool isKeyFrame;    // is keyframe
+};
+
 class MP4Muxer {
 public:
     MP4Muxer();
@@ -61,6 +68,9 @@ private:
     uint32_t m_frameCount;
     uint32_t m_keyFrameCount;
     
+    // Frame metadata for streaming
+    std::vector<FrameInfo> m_frames;
+    
     // Helper methods from SnapshotManager
     void write32(std::vector<uint8_t>& vec, uint32_t value);
     void write16(std::vector<uint8_t>& vec, uint16_t value);
@@ -70,8 +80,13 @@ private:
     // MP4 structure creation helpers (refactored to avoid duplication)
     static std::vector<uint8_t> createFtypBox();
     static std::vector<uint8_t> createMinimalMoovBox();
+    static std::vector<uint8_t> createVideoTrackMoovBox(const std::string& sps, const std::string& pps, 
+                                                       int width, int height);
     static std::vector<uint8_t> createMdatBox(const std::string& sps, const std::string& pps, 
                                               const unsigned char* h264Data, size_t dataSize);
+    
+    // Create proper moov box for multiple frames
+    std::vector<uint8_t> createMultiFrameMoovBox();
     
     // MP4 structure creation (moved from SnapshotManager)
     bool writeMP4Header();

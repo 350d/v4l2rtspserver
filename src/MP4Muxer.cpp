@@ -23,6 +23,7 @@
 MP4Muxer::MP4Muxer() 
     : m_fd(-1), m_initialized(false), m_width(0), m_height(0),
       m_mdatStartPos(0), m_currentPos(0), m_frameCount(0), m_keyFrameCount(0) {
+    m_frames.clear(); // initialize empty frame vector
 }
 
 MP4Muxer::~MP4Muxer() {
@@ -45,6 +46,7 @@ bool MP4Muxer::initialize(int fd, const std::string& sps, const std::string& pps
     m_frameCount = 0;
     m_keyFrameCount = 0;
     m_currentPos = 0;
+    m_frames.clear(); // clear frame information
     
     // Auto-detect dimensions from SPS if needed
     if (width == 0 || height == 0) {
@@ -69,10 +71,26 @@ bool MP4Muxer::addFrame(const unsigned char* h264Data, size_t dataSize, bool isK
         return false;
     }
     
-    // Write length-prefixed H264 frame data to mdat section
+    // FIXED version: don't add SPS/PPS to each frame for streaming
+    // Write only H264 frame data with length prefix
     uint32_t frameSize = static_cast<uint32_t>(dataSize);
-    writeToFile(&frameSize, 4); // Write frame size (big-endian would be better but this works)
+    
+    // Big-endian format for MP4 compatibility
+    uint8_t lenBytes[4];
+    lenBytes[0] = (frameSize >> 24) & 0xFF;
+    lenBytes[1] = (frameSize >> 16) & 0xFF;
+    lenBytes[2] = (frameSize >> 8) & 0xFF;
+    lenBytes[3] = frameSize & 0xFF;
+    
+    writeToFile(lenBytes, 4); // Write frame size in big-endian
     writeToFile(h264Data, dataSize);
+    
+    // Save metadata for possible moov writing at the end
+    FrameInfo frameInfo;
+    frameInfo.size = dataSize + 4; // frame size + length prefix
+    frameInfo.isKeyFrame = isKeyFrame;
+    frameInfo.offset = m_currentPos - frameInfo.size; // position in file
+    m_frames.push_back(frameInfo);
     
     m_frameCount++;
     if (isKeyFrame) {
@@ -80,7 +98,7 @@ bool MP4Muxer::addFrame(const unsigned char* h264Data, size_t dataSize, bool isK
     }
     
     LOG(DEBUG) << "[MP4Muxer] Added frame " << m_frameCount << " (" << dataSize << " bytes" 
-               << (isKeyFrame ? ", keyframe" : "") << ")";
+               << (isKeyFrame ? ", keyframe" : "") << ") at offset " << frameInfo.offset;
     
     return true;
 }
@@ -90,8 +108,15 @@ bool MP4Muxer::finalize() {
         return false;
     }
     
-    // For simplicity, we don't update mdat size (many players handle this)
-    // In a full implementation, we would seek back and update the mdat box size
+    // FIXED version: create proper moov box at the end of file
+    if (m_frameCount > 1 && !m_frames.empty()) {
+        // Create proper moov box for multiple frames like in createFixedMultiFrameMP4
+        std::vector<uint8_t> finalMoov = createMultiFrameMoovBox();
+        if (!finalMoov.empty()) {
+            writeToFile(finalMoov.data(), finalMoov.size());
+            LOG(INFO) << "[MP4Muxer] Written final moov box: " << finalMoov.size() << " bytes";
+        }
+    }
     
     m_initialized = false;
     LOG(INFO) << "[MP4Muxer] Finalized MP4 file - " << m_frameCount << " frames (" 
@@ -203,12 +228,13 @@ static void writeU8(std::vector<uint8_t>& vec, uint8_t value) {
     vec.push_back(value);
 }
 
-std::vector<uint8_t> MP4Muxer::createMinimalMoovBox() {
+std::vector<uint8_t> MP4Muxer::createVideoTrackMoovBox(const std::string& sps, const std::string& pps, 
+                                                        int width, int height) {
     std::vector<uint8_t> moov;
     writeU32(moov, 0); // size placeholder
     moov.insert(moov.end(), {'m', 'o', 'o', 'v'});
 
-    // mvhd box (movie header) - minimal
+    // mvhd box (movie header)
     writeU32(moov, 108); // box size
     moov.insert(moov.end(), {'m', 'v', 'h', 'd'});
     writeU8(moov, 0); // version
@@ -230,7 +256,264 @@ std::vector<uint8_t> MP4Muxer::createMinimalMoovBox() {
     // pre_defined
     for (int i = 0; i < 6; i++) writeU32(moov, 0);
     writeU32(moov, 2); // next_track_ID
+
+    // Track box (trak)
+    std::vector<uint8_t> trak;
+    writeU32(trak, 0); // size placeholder
+    trak.insert(trak.end(), {'t', 'r', 'a', 'k'});
+
+    // Track header (tkhd)
+    writeU32(trak, 92); // box size
+    trak.insert(trak.end(), {'t', 'k', 'h', 'd'});
+    writeU8(trak, 0); // version
+    writeU8(trak, 0); writeU8(trak, 0); writeU8(trak, 0x07); // flags (track enabled)
+    writeU32(trak, 0); // creation_time
+    writeU32(trak, 0); // modification_time
+    writeU32(trak, 1); // track_ID
+    writeU32(trak, 0); // reserved
+    writeU32(trak, 1000); // duration
+    writeU32(trak, 0); writeU32(trak, 0); // reserved
+    writeU16(trak, 0); // layer
+    writeU16(trak, 0); // alternate_group
+    writeU16(trak, 0); // volume
+    writeU16(trak, 0); // reserved
     
+    // transformation matrix (identity)
+    writeU32(trak, 0x00010000); writeU32(trak, 0); writeU32(trak, 0);
+    writeU32(trak, 0); writeU32(trak, 0x00010000); writeU32(trak, 0);
+    writeU32(trak, 0); writeU32(trak, 0); writeU32(trak, 0x40000000);
+    
+    writeU32(trak, width << 16); // width (32-bit fixed point)
+    writeU32(trak, height << 16); // height (32-bit fixed point)
+
+    // Media box (mdia)
+    std::vector<uint8_t> mdia;
+    writeU32(mdia, 0); // size placeholder
+    mdia.insert(mdia.end(), {'m', 'd', 'i', 'a'});
+
+    // Media header (mdhd)
+    writeU32(mdia, 32); // box size
+    mdia.insert(mdia.end(), {'m', 'd', 'h', 'd'});
+    writeU8(mdia, 0); // version
+    writeU8(mdia, 0); writeU8(mdia, 0); writeU8(mdia, 0); // flags
+    writeU32(mdia, 0); // creation_time
+    writeU32(mdia, 0); // modification_time
+    writeU32(mdia, 90000); // timescale (typical for video)
+    writeU32(mdia, 90000); // duration
+    writeU16(mdia, 0x55c4); // language (und)
+    writeU16(mdia, 0); // pre_defined
+
+    // Handler reference (hdlr)
+    writeU32(mdia, 45); // box size
+    mdia.insert(mdia.end(), {'h', 'd', 'l', 'r'});
+    writeU8(mdia, 0); // version
+    writeU8(mdia, 0); writeU8(mdia, 0); writeU8(mdia, 0); // flags
+    writeU32(mdia, 0); // pre_defined
+    mdia.insert(mdia.end(), {'v', 'i', 'd', 'e'}); // handler_type
+    writeU32(mdia, 0); writeU32(mdia, 0); writeU32(mdia, 0); // reserved
+    mdia.insert(mdia.end(), {'V', 'i', 'd', 'e', 'o', 'H', 'a', 'n', 'd', 'l', 'e', 'r', '\0'}); // name
+
+    // Media information (minf)
+    std::vector<uint8_t> minf;
+    writeU32(minf, 0); // size placeholder
+    minf.insert(minf.end(), {'m', 'i', 'n', 'f'});
+
+    // Video media header (vmhd)
+    writeU32(minf, 20); // box size
+    minf.insert(minf.end(), {'v', 'm', 'h', 'd'});
+    writeU8(minf, 0); // version
+    writeU8(minf, 0); writeU8(minf, 0); writeU8(minf, 1); // flags
+    writeU16(minf, 0); // graphicsmode
+    writeU16(minf, 0); writeU16(minf, 0); writeU16(minf, 0); // opcolor
+
+    // Data information (dinf)
+    writeU32(minf, 36); // box size
+    minf.insert(minf.end(), {'d', 'i', 'n', 'f'});
+    writeU32(minf, 28); // dref box size
+    minf.insert(minf.end(), {'d', 'r', 'e', 'f'});
+    writeU8(minf, 0); // version
+    writeU8(minf, 0); writeU8(minf, 0); writeU8(minf, 0); // flags
+    writeU32(minf, 1); // entry_count
+    writeU32(minf, 12); // url box size
+    minf.insert(minf.end(), {'u', 'r', 'l', ' '});
+    writeU8(minf, 0); // version
+    writeU8(minf, 0); writeU8(minf, 0); writeU8(minf, 1); // flags (self-contained)
+
+    // Sample table (stbl)
+    std::vector<uint8_t> stbl;
+    writeU32(stbl, 0); // size placeholder
+    stbl.insert(stbl.end(), {'s', 't', 'b', 'l'});
+
+    // Sample description (stsd)
+    std::vector<uint8_t> stsd;
+    writeU32(stsd, 0); // size placeholder
+    stsd.insert(stsd.end(), {'s', 't', 's', 'd'});
+    writeU8(stsd, 0); // version
+    writeU8(stsd, 0); writeU8(stsd, 0); writeU8(stsd, 0); // flags
+    writeU32(stsd, 1); // entry_count
+
+    // AVC1 sample entry
+    std::vector<uint8_t> avc1;
+    writeU32(avc1, 0); // size placeholder
+    avc1.insert(avc1.end(), {'a', 'v', 'c', '1'});
+    writeU16(avc1, 0); writeU16(avc1, 0); writeU16(avc1, 0); // reserved
+    writeU16(avc1, 1); // data_reference_index
+    writeU16(avc1, 0); writeU16(avc1, 0); // pre_defined
+    writeU32(avc1, 0); writeU32(avc1, 0); writeU32(avc1, 0); // reserved
+    writeU16(avc1, width); // width
+    writeU16(avc1, height); // height
+    writeU32(avc1, 0x00480000); // horizresolution (72 dpi)
+    writeU32(avc1, 0x00480000); // vertresolution (72 dpi)
+    writeU32(avc1, 0); // reserved
+    writeU16(avc1, 1); // frame_count
+    for (int i = 0; i < 32; i++) writeU8(avc1, 0); // compressorname
+    writeU16(avc1, 0x0018); // depth
+    writeU16(avc1, 0xFFFF); // pre_defined
+
+    // AVC configuration (avcC)
+    std::vector<uint8_t> avcC;
+    writeU32(avcC, 0); // size placeholder
+    avcC.insert(avcC.end(), {'a', 'v', 'c', 'C'});
+    writeU8(avcC, 1); // configurationVersion
+    writeU8(avcC, sps.size() > 1 ? sps[1] : 0x64); // AVCProfileIndication
+    writeU8(avcC, sps.size() > 2 ? sps[2] : 0x00); // profile_compatibility
+    writeU8(avcC, sps.size() > 3 ? sps[3] : 0x1f); // AVCLevelIndication
+    writeU8(avcC, 0xFF); // lengthSizeMinusOne (4 bytes)
+    writeU8(avcC, 0xE1); // numOfSequenceParameterSets (1)
+    writeU16(avcC, sps.size()); // sequenceParameterSetLength
+    avcC.insert(avcC.end(), sps.begin(), sps.end()); // SPS data
+    writeU8(avcC, 1); // numOfPictureParameterSets
+    writeU16(avcC, pps.size()); // pictureParameterSetLength
+    avcC.insert(avcC.end(), pps.begin(), pps.end()); // PPS data
+
+    // Update avcC size
+    uint32_t avcCSize = avcC.size();
+    avcC[0] = (avcCSize >> 24) & 0xFF;
+    avcC[1] = (avcCSize >> 16) & 0xFF;
+    avcC[2] = (avcCSize >> 8) & 0xFF;
+    avcC[3] = avcCSize & 0xFF;
+
+    // Add avcC to avc1
+    avc1.insert(avc1.end(), avcC.begin(), avcC.end());
+
+    // Update avc1 size
+    uint32_t avc1Size = avc1.size();
+    avc1[0] = (avc1Size >> 24) & 0xFF;
+    avc1[1] = (avc1Size >> 16) & 0xFF;
+    avc1[2] = (avc1Size >> 8) & 0xFF;
+    avc1[3] = avc1Size & 0xFF;
+
+    // Add avc1 to stsd
+    stsd.insert(stsd.end(), avc1.begin(), avc1.end());
+
+    // Update stsd size
+    uint32_t stsdSize = stsd.size();
+    stsd[0] = (stsdSize >> 24) & 0xFF;
+    stsd[1] = (stsdSize >> 16) & 0xFF;
+    stsd[2] = (stsdSize >> 8) & 0xFF;
+    stsd[3] = stsdSize & 0xFF;
+
+    // Add stsd to stbl
+    stbl.insert(stbl.end(), stsd.begin(), stsd.end());
+
+    // Update stbl size
+    uint32_t stblSize = stbl.size();
+    stbl[0] = (stblSize >> 24) & 0xFF;
+    stbl[1] = (stblSize >> 16) & 0xFF;
+    stbl[2] = (stblSize >> 8) & 0xFF;
+    stbl[3] = stblSize & 0xFF;
+
+    // Sample time table (stts)
+    std::vector<uint8_t> stts;
+    writeU32(stts, 24); // box size
+    stts.insert(stts.end(), {'s', 't', 't', 's'});
+    writeU8(stts, 0); // version
+    writeU8(stts, 0); writeU8(stts, 0); writeU8(stts, 0); // flags
+    writeU32(stts, 1); // entry_count
+    writeU32(stts, 1); // sample_count
+    writeU32(stts, 1000); // sample_delta
+    
+    stbl.insert(stbl.end(), stts.begin(), stts.end());
+
+    // Sync sample table (stss)
+    std::vector<uint8_t> stss;
+    writeU32(stss, 20); // box size
+    stss.insert(stss.end(), {'s', 't', 's', 's'});
+    writeU8(stss, 0); // version
+    writeU8(stss, 0); writeU8(stss, 0); writeU8(stss, 0); // flags
+    writeU32(stss, 1); // entry_count
+    writeU32(stss, 1); // sample_number
+    
+    stbl.insert(stbl.end(), stss.begin(), stss.end());
+
+    // Sample to chunk table (stsc)
+    std::vector<uint8_t> stsc;
+    writeU32(stsc, 28); // box size
+    stsc.insert(stsc.end(), {'s', 't', 's', 'c'});
+    writeU8(stsc, 0); // version
+    writeU8(stsc, 0); writeU8(stsc, 0); writeU8(stsc, 0); // flags
+    writeU32(stsc, 1); // entry_count
+    writeU32(stsc, 1); // first_chunk
+    writeU32(stsc, 1); // samples_per_chunk
+    writeU32(stsc, 1); // sample_description_index
+    
+    stbl.insert(stbl.end(), stsc.begin(), stsc.end());
+
+    // Sample size table (stsz)
+    std::vector<uint8_t> stsz;
+    writeU32(stsz, 20); // box size
+    stsz.insert(stsz.end(), {'s', 't', 's', 'z'});
+    writeU8(stsz, 0); // version
+    writeU8(stsz, 0); writeU8(stsz, 0); writeU8(stsz, 0); // flags
+    writeU32(stsz, 0); // sample_size (0 = variable sizes)
+    writeU32(stsz, 0); // sample_count
+    
+    stbl.insert(stbl.end(), stsz.begin(), stsz.end());
+
+    // Chunk offset table (stco)
+    std::vector<uint8_t> stco;
+    writeU32(stco, 20); // box size
+    stco.insert(stco.end(), {'s', 't', 'c', 'o'});
+    writeU8(stco, 0); // version
+    writeU8(stco, 0); writeU8(stco, 0); writeU8(stco, 0); // flags
+    writeU32(stco, 1); // entry_count
+    writeU32(stco, 40); // chunk_offset (placeholder)
+    
+    stbl.insert(stbl.end(), stco.begin(), stco.end());
+
+    // Add stbl to minf
+    minf.insert(minf.end(), stbl.begin(), stbl.end());
+
+    // Update minf size
+    uint32_t minfSize = minf.size();
+    minf[0] = (minfSize >> 24) & 0xFF;
+    minf[1] = (minfSize >> 16) & 0xFF;
+    minf[2] = (minfSize >> 8) & 0xFF;
+    minf[3] = minfSize & 0xFF;
+
+    // Add minf to mdia
+    mdia.insert(mdia.end(), minf.begin(), minf.end());
+
+    // Update mdia size
+    uint32_t mdiaSize = mdia.size();
+    mdia[0] = (mdiaSize >> 24) & 0xFF;
+    mdia[1] = (mdiaSize >> 16) & 0xFF;
+    mdia[2] = (mdiaSize >> 8) & 0xFF;
+    mdia[3] = mdiaSize & 0xFF;
+
+    // Add mdia to trak
+    trak.insert(trak.end(), mdia.begin(), mdia.end());
+
+    // Update trak size
+    uint32_t trakSize = trak.size();
+    trak[0] = (trakSize >> 24) & 0xFF;
+    trak[1] = (trakSize >> 16) & 0xFF;
+    trak[2] = (trakSize >> 8) & 0xFF;
+    trak[3] = trakSize & 0xFF;
+
+    // Add trak to moov
+    moov.insert(moov.end(), trak.begin(), trak.end());
+
     // Update moov size
     uint32_t moovSize = moov.size();
     moov[0] = (moovSize >> 24) & 0xFF;
@@ -239,36 +522,41 @@ std::vector<uint8_t> MP4Muxer::createMinimalMoovBox() {
     moov[3] = moovSize & 0xFF;
     
     return moov;
+    
 }
 
 std::vector<uint8_t> MP4Muxer::createMdatBox(const std::string& sps, const std::string& pps, 
                                               const unsigned char* h264Data, size_t dataSize) {
     std::vector<uint8_t> mdat;
-    std::vector<uint8_t> mdatData;
     
-    // Add SPS with length prefix
-    if (!sps.empty()) {
-        writeU32(mdatData, sps.size());
-        mdatData.insert(mdatData.end(), sps.begin(), sps.end());
-    }
-    
-    // Add PPS with length prefix
-    if (!pps.empty()) {
-        writeU32(mdatData, pps.size());
-        mdatData.insert(mdatData.end(), pps.begin(), pps.end());
-    }
-    
-    // Add H264 frame with length prefix
-    if (h264Data && dataSize > 0) {
-        writeU32(mdatData, dataSize);
-        mdatData.insert(mdatData.end(), h264Data, h264Data + dataSize);
-    }
-    
-    // mdat header
-    uint32_t mdatSize = mdatData.size() + 8;
-    writeU32(mdat, mdatSize);
+    // mdat header placeholder
+    writeU32(mdat, 0); // size placeholder
     mdat.insert(mdat.end(), {'m', 'd', 'a', 't'});
-    mdat.insert(mdat.end(), mdatData.begin(), mdatData.end());
+    
+    // Add SPS with length prefix (as in working version)
+    if (!sps.empty()) {
+        writeU32(mdat, sps.size());
+        mdat.insert(mdat.end(), sps.begin(), sps.end());
+    }
+    
+    // Add PPS with length prefix (as in working version)
+    if (!pps.empty()) {
+        writeU32(mdat, pps.size());
+        mdat.insert(mdat.end(), pps.begin(), pps.end());
+    }
+    
+    // Add H264 frame with length prefix (as in working version)
+    if (h264Data && dataSize > 0) {
+        writeU32(mdat, dataSize);
+        mdat.insert(mdat.end(), h264Data, h264Data + dataSize);
+    }
+    
+    // Update mdat size
+    uint32_t mdatSize = mdat.size();
+    mdat[0] = (mdatSize >> 24) & 0xFF;
+    mdat[1] = (mdatSize >> 16) & 0xFF;
+    mdat[2] = (mdatSize >> 8) & 0xFF;
+    mdat[3] = mdatSize & 0xFF;
     
     return mdat;
 }
@@ -298,7 +586,7 @@ bool MP4Muxer::writeMP4Header() {
     return true;
 }
 
-// Static method for creating MP4 snapshot in memory (refactored using helper methods)
+// Static method for creating MP4 snapshot in memory (FIXED with proper video track)
 std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, size_t dataSize,
                                                   const std::string& sps, const std::string& pps,
                                                   int width, int height) {
@@ -306,30 +594,363 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     
     if (!h264Data || dataSize == 0 || sps.empty() || pps.empty() || width <= 0 || height <= 0) {
         LOG(ERROR) << "[MP4Muxer] Invalid parameters for MP4 snapshot creation";
-        return mp4Data;
     }
     
     LOG(DEBUG) << "[MP4Muxer] Creating MP4 snapshot: " << dataSize << " bytes, " << width << "x" << height;
     
-    // Use helper methods to avoid code duplication
+    // 1. ftyp box (exactly as in REFERENCE.cpp)
+    std::vector<uint8_t> ftyp;
+    writeU32(ftyp, 0); // size placeholder
+    ftyp.insert(ftyp.end(), {'f', 't', 'y', 'p'});
+    ftyp.insert(ftyp.end(), {'i', 's', 'o', 'm'}); // major brand
+    writeU32(ftyp, 0x200); // minor version
+    ftyp.insert(ftyp.end(), {'i', 's', 'o', 'm'}); // compatible brands
+    ftyp.insert(ftyp.end(), {'i', 's', 'o', '2'});
+    ftyp.insert(ftyp.end(), {'a', 'v', 'c', '1'});
+    ftyp.insert(ftyp.end(), {'m', 'p', '4', '1'});
     
-    // 1. ftyp box
-    std::vector<uint8_t> ftyp = createFtypBox();
+    // Update ftyp size
+    uint32_t ftypSize = ftyp.size();
+    ftyp[0] = (ftypSize >> 24) & 0xFF;
+    ftyp[1] = (ftypSize >> 16) & 0xFF;
+    ftyp[2] = (ftypSize >> 8) & 0xFF;
+    ftyp[3] = ftypSize & 0xFF;
+    
     mp4Data.insert(mp4Data.end(), ftyp.begin(), ftyp.end());
+
+    // 2. mdat box (exactly as in REFERENCE.cpp)
+    std::vector<uint8_t> mdat;
+    writeU32(mdat, 0); // size placeholder
+    mdat.insert(mdat.end(), {'m', 'd', 'a', 't'});
     
-    // 2. mdat box with H.264 data
-    std::vector<uint8_t> mdat = createMdatBox(sps, pps, h264Data, dataSize);
+    // SPS
+    if (!sps.empty()) {
+        writeU32(mdat, sps.size());
+        mdat.insert(mdat.end(), sps.begin(), sps.end());
+    }
+    
+    // PPS  
+    if (!pps.empty()) {
+        writeU32(mdat, pps.size());
+        mdat.insert(mdat.end(), pps.begin(), pps.end());
+    }
+    
+    // H264 frame
+    writeU32(mdat, dataSize);
+    mdat.insert(mdat.end(), h264Data, h264Data + dataSize);
+    
+    // Update mdat size
+    uint32_t mdatSize = mdat.size();
+    mdat[0] = (mdatSize >> 24) & 0xFF;
+    mdat[1] = (mdatSize >> 16) & 0xFF;
+    mdat[2] = (mdatSize >> 8) & 0xFF;
+    mdat[3] = mdatSize & 0xFF;
+    
     mp4Data.insert(mp4Data.end(), mdat.begin(), mdat.end());
+
+    // 3. moov box (FULL VERSION as in REFERENCE.cpp)
+    std::vector<uint8_t> moov;
+    writeU32(moov, 0); // size placeholder
+    moov.insert(moov.end(), {'m', 'o', 'o', 'v'});
+
+    // 3.1 mvhd box
+    std::vector<uint8_t> mvhd;
+    writeU32(mvhd, 108); // box size
+    mvhd.insert(mvhd.end(), {'m', 'v', 'h', 'd'});
+    writeU8(mvhd, 0); // version
+    writeU8(mvhd, 0); writeU8(mvhd, 0); writeU8(mvhd, 0); // flags
+    writeU32(mvhd, 0); // creation_time
+    writeU32(mvhd, 0); // modification_time
+    writeU32(mvhd, 1000); // timescale
+    writeU32(mvhd, 1000); // duration (1 second)
+    writeU32(mvhd, 0x00010000); // rate (1.0)
+    writeU16(mvhd, 0x0100); // volume (1.0)
+    writeU16(mvhd, 0); // reserved
+    writeU32(mvhd, 0); writeU32(mvhd, 0); // reserved
+    // transformation matrix (identity)
+    writeU32(mvhd, 0x00010000); writeU32(mvhd, 0); writeU32(mvhd, 0);
+    writeU32(mvhd, 0); writeU32(mvhd, 0x00010000); writeU32(mvhd, 0);
+    writeU32(mvhd, 0); writeU32(mvhd, 0); writeU32(mvhd, 0x40000000);
+    // pre_defined
+    for (int i = 0; i < 6; i++) writeU32(mvhd, 0);
+    writeU32(mvhd, 2); // next_track_ID
     
-    // 3. Minimal moov box for compatibility (even simpler than for file headers)
-    std::vector<uint8_t> moov = {
-        0x00, 0x00, 0x00, 0x08,  // box size (8 bytes)
-        'm', 'o', 'o', 'v'       // box type
-    };
-    mp4Data.insert(mp4Data.end(), moov.begin(), moov.end());
+    moov.insert(moov.end(), mvhd.begin(), mvhd.end());
+
+    // 3.2 trak box
+    std::vector<uint8_t> trak;
+    writeU32(trak, 0); // size placeholder
+    trak.insert(trak.end(), {'t', 'r', 'a', 'k'});
+
+    // 3.2.1 tkhd box
+    std::vector<uint8_t> tkhd;
+    writeU32(tkhd, 92); // box size
+    tkhd.insert(tkhd.end(), {'t', 'k', 'h', 'd'});
+    writeU8(tkhd, 0); // version
+    writeU8(tkhd, 0); writeU8(tkhd, 0); writeU8(tkhd, 0xF); // flags (track enabled)
+    writeU32(tkhd, 0); // creation_time
+    writeU32(tkhd, 0); // modification_time
+    writeU32(tkhd, 1); // track_ID
+    writeU32(tkhd, 0); // reserved
+    writeU32(tkhd, 1000); // duration
+    writeU32(tkhd, 0); writeU32(tkhd, 0); // reserved
+    writeU16(tkhd, 0); // layer
+    writeU16(tkhd, 0); // alternate_group
+    writeU16(tkhd, 0); // volume
+    writeU16(tkhd, 0); // reserved
+    // transformation matrix (identity)
+    writeU32(tkhd, 0x00010000); writeU32(tkhd, 0); writeU32(tkhd, 0);
+    writeU32(tkhd, 0); writeU32(tkhd, 0x00010000); writeU32(tkhd, 0);
+    writeU32(tkhd, 0); writeU32(tkhd, 0); writeU32(tkhd, 0x40000000);
+    writeU32(tkhd, width << 16); // width
+    writeU32(tkhd, height << 16); // height
     
-    LOG(DEBUG) << "[MP4Muxer] MP4 snapshot created: " << mp4Data.size() << " bytes";
-    return mp4Data;
+    trak.insert(trak.end(), tkhd.begin(), tkhd.end());
+
+    // 3.2.2 mdia box
+    std::vector<uint8_t> mdia;
+    writeU32(mdia, 0); // size placeholder
+    mdia.insert(mdia.end(), {'m', 'd', 'i', 'a'});
+
+    // 3.2.2.1 mdhd box
+    std::vector<uint8_t> mdhd;
+    writeU32(mdhd, 32); // box size
+    mdhd.insert(mdhd.end(), {'m', 'd', 'h', 'd'});
+    writeU8(mdhd, 0); // version
+    writeU8(mdhd, 0); writeU8(mdhd, 0); writeU8(mdhd, 0); // flags
+    writeU32(mdhd, 0); // creation_time
+    writeU32(mdhd, 0); // modification_time
+    writeU32(mdhd, 9000); // timescale
+    writeU32(mdhd, 9000); // duration
+    writeU16(mdhd, 0x55c4); // language (und)
+    writeU16(mdhd, 0); // pre_defined
+    
+    mdia.insert(mdia.end(), mdhd.begin(), mdhd.end());
+
+    // 3.2.2.2 hdlr box
+    std::vector<uint8_t> hdlr;
+    writeU32(hdlr, 33); // box size
+    hdlr.insert(hdlr.end(), {'h', 'd', 'l', 'r'});
+    writeU8(hdlr, 0); // version
+    writeU8(hdlr, 0); writeU8(hdlr, 0); writeU8(hdlr, 0); // flags
+    writeU32(hdlr, 0); // pre_defined
+    hdlr.insert(hdlr.end(), {'v', 'i', 'd', 'e'}); // handler_type
+    writeU32(hdlr, 0); writeU32(hdlr, 0); writeU32(hdlr, 0); // reserved
+    hdlr.push_back(0); // name (empty string)
+    
+    mdia.insert(mdia.end(), hdlr.begin(), hdlr.end());
+
+    // 3.2.2.3 minf box
+    std::vector<uint8_t> minf;
+    writeU32(minf, 0); // size placeholder
+    minf.insert(minf.end(), {'m', 'i', 'n', 'f'});
+
+    // 3.2.2.3.1 vmhd box
+    std::vector<uint8_t> vmhd;
+    writeU32(vmhd, 20); // box size
+    vmhd.insert(vmhd.end(), {'v', 'm', 'h', 'd'});
+    writeU8(vmhd, 0); // version
+    writeU8(vmhd, 0); writeU8(vmhd, 0); writeU8(vmhd, 1); // flags
+    writeU16(vmhd, 0); // graphicsmode
+    writeU16(vmhd, 0); writeU16(vmhd, 0); writeU16(vmhd, 0); // opcolor
+    
+    minf.insert(minf.end(), vmhd.begin(), vmhd.end());
+
+    // 3.2.2.3.2 dinf box - FIXED: correct dref
+    std::vector<uint8_t> dinf;
+    writeU32(dinf, 36); // box size
+    dinf.insert(dinf.end(), {'d', 'i', 'n', 'f'});
+    
+    // dref box
+    std::vector<uint8_t> dref;
+    writeU32(dref, 28); // box size
+    dref.insert(dref.end(), {'d', 'r', 'e', 'f'});
+    writeU8(dref, 0); // version
+    writeU8(dref, 0); writeU8(dref, 0); writeU8(dref, 0); // flags
+    writeU32(dref, 1); // entry_count
+    
+    // url box - FIXED: correct type
+    writeU32(dref, 12); // box size
+    dref.insert(dref.end(), {'u', 'r', 'l', ' '}); // CORRECT type
+    writeU8(dref, 0); // version
+    writeU8(dref, 0); writeU8(dref, 0); writeU8(dref, 1); // flags (self-contained)
+    
+    dinf.insert(dinf.end(), dref.begin(), dref.end());
+    minf.insert(minf.end(), dinf.begin(), dinf.end());
+
+    // 3.2.2.3.3 stbl box
+    std::vector<uint8_t> stbl;
+    writeU32(stbl, 0); // size placeholder
+    stbl.insert(stbl.end(), {'s', 't', 'b', 'l'});
+
+    // avcC configuration record
+    std::vector<uint8_t> avcC;
+    writeU8(avcC, 1); // configurationVersion
+    writeU8(avcC, sps.size() >= 4 ? sps[1] : 0x64); // AVCProfileIndication
+    writeU8(avcC, sps.size() >= 4 ? sps[2] : 0x00); // profile_compatibility
+    writeU8(avcC, sps.size() >= 4 ? sps[3] : 0x28); // AVCLevelIndication
+    writeU8(avcC, 0xFF); // lengthSizeMinusOne (4 bytes)
+    writeU8(avcC, 0xE1); // numOfSequenceParameterSets
+    writeU16(avcC, sps.size());
+    avcC.insert(avcC.end(), sps.begin(), sps.end());
+    writeU8(avcC, 1); // numOfPictureParameterSets
+    writeU16(avcC, pps.size());
+    avcC.insert(avcC.end(), pps.begin(), pps.end());
+
+    // stsd box
+    std::vector<uint8_t> stsd;
+    writeU32(stsd, 0); // size placeholder
+    stsd.insert(stsd.end(), {'s', 't', 's', 'd'});
+    writeU8(stsd, 0); // version
+    writeU8(stsd, 0); writeU8(stsd, 0); writeU8(stsd, 0); // flags
+    writeU32(stsd, 1); // entry_count
+
+    // avc1 sample entry
+    std::vector<uint8_t> avc1;
+    writeU32(avc1, 0); // size placeholder
+    avc1.insert(avc1.end(), {'a', 'v', 'c', '1'});
+    // reserved
+    for (int i = 0; i < 6; i++) writeU8(avc1, 0);
+    writeU16(avc1, 1); // data_reference_index
+    // pre_defined and reserved
+    for (int i = 0; i < 16; i++) writeU8(avc1, 0);
+    writeU16(avc1, width); // width
+    writeU16(avc1, height); // height
+    writeU32(avc1, 0x00480000); // horizresolution (72 dpi)
+    writeU32(avc1, 0x00480000); // vertresolution (72 dpi)
+    writeU32(avc1, 0); // reserved
+    writeU16(avc1, 1); // frame_count
+    // compressorname (32 bytes)
+    for (int i = 0; i < 32; i++) writeU8(avc1, 0);
+    writeU16(avc1, 0x0018); // depth
+    writeU16(avc1, 0xFFFF); // pre_defined
+
+    // avcC box
+    std::vector<uint8_t> avcCBox;
+    writeU32(avcCBox, avcC.size() + 8); // box size
+    avcCBox.insert(avcCBox.end(), {'a', 'v', 'c', 'C'});
+    avcCBox.insert(avcCBox.end(), avcC.begin(), avcC.end());
+    
+    avc1.insert(avc1.end(), avcCBox.begin(), avcCBox.end());
+    
+    // Update avc1 size
+    uint32_t avc1Size = avc1.size();
+    avc1[0] = (avc1Size >> 24) & 0xFF;
+    avc1[1] = (avc1Size >> 16) & 0xFF;
+    avc1[2] = (avc1Size >> 8) & 0xFF;
+    avc1[3] = avc1Size & 0xFF;
+    
+    stsd.insert(stsd.end(), avc1.begin(), avc1.end());
+    
+    // Update stsd size
+    uint32_t stsdSize = stsd.size();
+    stsd[0] = (stsdSize >> 24) & 0xFF;
+    stsd[1] = (stsdSize >> 16) & 0xFF;
+    stsd[2] = (stsdSize >> 8) & 0xFF;
+    stsd[3] = stsdSize & 0xFF;
+    
+    stbl.insert(stbl.end(), stsd.begin(), stsd.end());
+
+    // stts box (time-to-sample)
+    std::vector<uint8_t> stts;
+    writeU32(stts, 24); // box size
+    stts.insert(stts.end(), {'s', 't', 't', 's'});
+    writeU8(stts, 0); // version
+    writeU8(stts, 0); writeU8(stts, 0); writeU8(stts, 0); // flags
+    writeU32(stts, 1); // entry_count
+    writeU32(stts, 1); // sample_count
+    writeU32(stts, 1000); // sample_delta
+    
+    stbl.insert(stbl.end(), stts.begin(), stts.end());
+
+    // stss box (sync sample - keyframes)
+    std::vector<uint8_t> stss;
+    writeU32(stss, 20); // box size
+    stss.insert(stss.end(), {'s', 't', 's', 's'});
+    writeU8(stss, 0); // version
+    writeU8(stss, 0); writeU8(stss, 0); writeU8(stss, 0); // flags
+    writeU32(stss, 1); // entry_count
+    writeU32(stss, 1); // sample_number
+    
+    stbl.insert(stbl.end(), stss.begin(), stss.end());
+
+    // stsc box (sample-to-chunk)
+    std::vector<uint8_t> stsc;
+    writeU32(stsc, 28); // box size
+    stsc.insert(stsc.end(), {'s', 't', 's', 'c'});
+    writeU8(stsc, 0); // version
+    writeU8(stsc, 0); writeU8(stsc, 0); writeU8(stsc, 0); // flags
+    writeU32(stsc, 1); // entry_count
+    writeU32(stsc, 1); // first_chunk
+    writeU32(stsc, 1); // samples_per_chunk
+    writeU32(stsc, 1); // sample_description_index
+    
+    stbl.insert(stbl.end(), stsc.begin(), stsc.end());
+
+    // stsz box (sample sizes)
+    std::vector<uint8_t> stsz;
+    writeU32(stsz, 20); // box size
+    stsz.insert(stsz.end(), {'s', 't', 's', 'z'});
+    writeU8(stsz, 0); // version
+    writeU8(stsz, 0); writeU8(stsz, 0); writeU8(stsz, 0); // flags
+    writeU32(stsz, 0); // sample_size (0 = variable sizes)
+    writeU32(stsz, 0); // sample_count
+    
+    stbl.insert(stbl.end(), stsz.begin(), stsz.end());
+
+    // Chunk offset table (stco)
+    std::vector<uint8_t> stco;
+    writeU32(stco, 20); // box size
+    stco.insert(stco.end(), {'s', 't', 'c', 'o'});
+    writeU8(stco, 0); // version
+    writeU8(stco, 0); writeU8(stco, 0); writeU8(stco, 0); // flags
+    writeU32(stco, 1); // entry_count
+    writeU32(stco, 40); // chunk_offset (placeholder)
+    
+    stbl.insert(stbl.end(), stco.begin(), stco.end());
+
+    // Add stbl to minf
+    minf.insert(minf.end(), stbl.begin(), stbl.end());
+
+    // Update minf size
+    uint32_t minfSize = minf.size();
+    minf[0] = (minfSize >> 24) & 0xFF;
+    minf[1] = (minfSize >> 16) & 0xFF;
+    minf[2] = (minfSize >> 8) & 0xFF;
+    minf[3] = minfSize & 0xFF;
+
+    // Add minf to mdia
+    mdia.insert(mdia.end(), minf.begin(), minf.end());
+
+    // Update mdia size
+    uint32_t mdiaSize = mdia.size();
+    mdia[0] = (mdiaSize >> 24) & 0xFF;
+    mdia[1] = (mdiaSize >> 16) & 0xFF;
+    mdia[2] = (mdiaSize >> 8) & 0xFF;
+    mdia[3] = mdiaSize & 0xFF;
+
+    // Add mdia to trak
+    trak.insert(trak.end(), mdia.begin(), mdia.end());
+
+    // Update trak size
+    uint32_t trakSize = trak.size();
+    trak[0] = (trakSize >> 24) & 0xFF;
+    trak[1] = (trakSize >> 16) & 0xFF;
+    trak[2] = (trakSize >> 8) & 0xFF;
+    trak[3] = trakSize & 0xFF;
+
+    // Add trak to moov
+    moov.insert(moov.end(), trak.begin(), trak.end());
+
+    // Update moov size
+    uint32_t moovSize = moov.size();
+    moov[0] = (moovSize >> 24) & 0xFF;
+    moov[1] = (moovSize >> 16) & 0xFF;
+    moov[2] = (moovSize >> 8) & 0xFF;
+    moov[3] = moovSize & 0xFF;
+    
+    return moov;
+    
 }
 
 // Static debug method for H264 data analysis (moved from SnapshotManager)
@@ -484,4 +1105,362 @@ std::string MP4Muxer::getCurrentTimestamp() {
     std::stringstream ss;
     ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
     return ss.str();
+}
+
+std::vector<uint8_t> MP4Muxer::createMinimalMoovBox() {
+    std::vector<uint8_t> moov;
+    writeU32(moov, 108); // box size
+    moov.insert(moov.end(), {'m', 'v', 'h', 'd'});
+    writeU8(moov, 0); // version
+    writeU8(moov, 0); writeU8(moov, 0); writeU8(moov, 0); // flags
+    writeU32(moov, 0); // creation_time
+    writeU32(moov, 0); // modification_time
+    writeU32(moov, 1000); // timescale
+    writeU32(moov, 1000); // duration
+    writeU32(moov, 0x00010000); // rate (1.0)
+    writeU16(moov, 0x0100); // volume (1.0)
+    writeU16(moov, 0); // reserved
+    writeU32(moov, 0); writeU32(moov, 0); // reserved
+    
+    // transformation matrix (identity)
+    writeU32(moov, 0x00010000); writeU32(moov, 0); writeU32(moov, 0);
+    writeU32(moov, 0); writeU32(moov, 0x00010000); writeU32(moov, 0);
+    writeU32(moov, 0); writeU32(moov, 0); writeU32(moov, 0x40000000);
+    
+    // pre_defined
+    for (int i = 0; i < 6; i++) writeU32(moov, 0);
+    writeU32(moov, 2); // next_track_ID
+    
+    // Update moov size
+    uint32_t moovSize = moov.size();
+    moov[0] = (moovSize >> 24) & 0xFF;
+    moov[1] = (moovSize >> 16) & 0xFF;
+    moov[2] = (moovSize >> 8) & 0xFF;
+    moov[3] = moovSize & 0xFF;
+    
+    return moov;
+}
+
+std::vector<uint8_t> MP4Muxer::createMultiFrameMoovBox() {
+    if (m_frames.empty()) {
+        return std::vector<uint8_t>();
+    }
+    
+    std::vector<uint8_t> moov;
+    writeU32(moov, 0); // size placeholder
+    moov.insert(moov.end(), {'m', 'o', 'o', 'v'});
+
+    // mvhd box
+    std::vector<uint8_t> mvhd;
+    writeU32(mvhd, 108); // box size
+    mvhd.insert(mvhd.end(), {'m', 'v', 'h', 'd'});
+    writeU8(mvhd, 0); // version
+    writeU8(mvhd, 0); writeU8(mvhd, 0); writeU8(mvhd, 0); // flags
+    writeU32(mvhd, 0); // creation_time
+    writeU32(mvhd, 0); // modification_time
+    writeU32(mvhd, 1000); // timescale
+    writeU32(mvhd, m_frameCount * 1000); // duration (frameCount seconds at 1fps)
+    writeU32(mvhd, 0x00010000); // rate (1.0)
+    writeU16(mvhd, 0x0100); // volume (1.0)
+    writeU16(mvhd, 0); // reserved
+    writeU32(mvhd, 0); writeU32(mvhd, 0); // reserved
+    // transformation matrix (identity)
+    writeU32(mvhd, 0x00010000); writeU32(mvhd, 0); writeU32(mvhd, 0);
+    writeU32(mvhd, 0); writeU32(mvhd, 0x00010000); writeU32(mvhd, 0);
+    writeU32(mvhd, 0); writeU32(mvhd, 0); writeU32(mvhd, 0x40000000);
+    // pre_defined
+    for (int i = 0; i < 6; i++) writeU32(mvhd, 0);
+    writeU32(mvhd, 2); // next_track_ID
+    
+    moov.insert(moov.end(), mvhd.begin(), mvhd.end());
+
+    // trak box
+    std::vector<uint8_t> trak;
+    writeU32(trak, 0); // size placeholder
+    trak.insert(trak.end(), {'t', 'r', 'a', 'k'});
+
+    // tkhd box
+    std::vector<uint8_t> tkhd;
+    writeU32(tkhd, 92); // box size
+    tkhd.insert(tkhd.end(), {'t', 'k', 'h', 'd'});
+    writeU8(tkhd, 0); // version
+    writeU8(tkhd, 0); writeU8(tkhd, 0); writeU8(tkhd, 0xF); // flags (track enabled)
+    writeU32(tkhd, 0); // creation_time
+    writeU32(tkhd, 0); // modification_time
+    writeU32(tkhd, 1); // track_ID
+    writeU32(tkhd, 0); // reserved
+    writeU32(tkhd, m_frameCount * 1000); // duration
+    writeU32(tkhd, 0); writeU32(tkhd, 0); // reserved
+    writeU16(tkhd, 0); // layer
+    writeU16(tkhd, 0); // alternate_group
+    writeU16(tkhd, 0); // volume
+    writeU16(tkhd, 0); // reserved
+    // transformation matrix (identity)
+    writeU32(tkhd, 0x00010000); writeU32(tkhd, 0); writeU32(tkhd, 0);
+    writeU32(tkhd, 0); writeU32(tkhd, 0x00010000); writeU32(tkhd, 0);
+    writeU32(tkhd, 0); writeU32(tkhd, 0); writeU32(tkhd, 0x40000000);
+    writeU32(tkhd, m_width << 16); // width
+    writeU32(tkhd, m_height << 16); // height
+    
+    trak.insert(trak.end(), tkhd.begin(), tkhd.end());
+
+    // mdia box
+    std::vector<uint8_t> mdia;
+    writeU32(mdia, 0); // size placeholder
+    mdia.insert(mdia.end(), {'m', 'd', 'i', 'a'});
+
+    // mdhd box
+    std::vector<uint8_t> mdhd;
+    writeU32(mdhd, 32); // box size
+    mdhd.insert(mdhd.end(), {'m', 'd', 'h', 'd'});
+    writeU8(mdhd, 0); // version
+    writeU8(mdhd, 0); writeU8(mdhd, 0); writeU8(mdhd, 0); // flags
+    writeU32(mdhd, 0); // creation_time
+    writeU32(mdhd, 0); // modification_time
+    writeU32(mdhd, 1000); // timescale
+    writeU32(mdhd, m_frameCount * 1000); // duration
+    writeU16(mdhd, 0x55c4); // language (und)
+    writeU16(mdhd, 0); // pre_defined
+    
+    mdia.insert(mdia.end(), mdhd.begin(), mdhd.end());
+
+    // hdlr box
+    std::vector<uint8_t> hdlr;
+    writeU32(hdlr, 33); // box size
+    hdlr.insert(hdlr.end(), {'h', 'd', 'l', 'r'});
+    writeU8(hdlr, 0); // version
+    writeU8(hdlr, 0); writeU8(hdlr, 0); writeU8(hdlr, 0); // flags
+    writeU32(hdlr, 0); // pre_defined
+    hdlr.insert(hdlr.end(), {'v', 'i', 'd', 'e'}); // handler_type
+    writeU32(hdlr, 0); writeU32(hdlr, 0); writeU32(hdlr, 0); // reserved
+    hdlr.push_back(0); // name (empty string)
+    
+    mdia.insert(mdia.end(), hdlr.begin(), hdlr.end());
+
+    // minf box
+    std::vector<uint8_t> minf;
+    writeU32(minf, 0); // size placeholder
+    minf.insert(minf.end(), {'m', 'i', 'n', 'f'});
+
+    // vmhd box
+    std::vector<uint8_t> vmhd;
+    writeU32(vmhd, 20); // box size
+    vmhd.insert(vmhd.end(), {'v', 'm', 'h', 'd'});
+    writeU8(vmhd, 0); // version
+    writeU8(vmhd, 0); writeU8(vmhd, 0); writeU8(vmhd, 1); // flags
+    writeU16(vmhd, 0); // graphicsmode
+    writeU16(vmhd, 0); writeU16(vmhd, 0); writeU16(vmhd, 0); // opcolor
+    
+    minf.insert(minf.end(), vmhd.begin(), vmhd.end());
+
+    // dinf box - FIXED: correct dref
+    std::vector<uint8_t> dinf;
+    writeU32(dinf, 36); // box size
+    dinf.insert(dinf.end(), {'d', 'i', 'n', 'f'});
+    
+    // dref box
+    std::vector<uint8_t> dref;
+    writeU32(dref, 28); // box size
+    dref.insert(dref.end(), {'d', 'r', 'e', 'f'});
+    writeU8(dref, 0); // version
+    writeU8(dref, 0); writeU8(dref, 0); writeU8(dref, 0); // flags
+    writeU32(dref, 1); // entry_count
+    
+    // url box - FIXED: correct type
+    writeU32(dref, 12); // box size
+    dref.insert(dref.end(), {'u', 'r', 'l', ' '}); // CORRECT type
+    writeU8(dref, 0); // version
+    writeU8(dref, 0); writeU8(dref, 0); writeU8(dref, 1); // flags (self-contained)
+    
+    dinf.insert(dinf.end(), dref.begin(), dref.end());
+    minf.insert(minf.end(), dinf.begin(), dinf.end());
+
+    // stbl box for multiple frames - FIXED VERSION
+    std::vector<uint8_t> stbl;
+    writeU32(stbl, 0); // size placeholder
+    stbl.insert(stbl.end(), {'s', 't', 'b', 'l'});
+
+    // avcC configuration record
+    std::vector<uint8_t> avcC;
+    writeU8(avcC, 1); // configurationVersion
+    writeU8(avcC, m_sps.size() >= 4 ? m_sps[1] : 0x64); // AVCProfileIndication
+    writeU8(avcC, m_sps.size() >= 4 ? m_sps[2] : 0x00); // profile_compatibility
+    writeU8(avcC, m_sps.size() >= 4 ? m_sps[3] : 0x28); // AVCLevelIndication
+    writeU8(avcC, 0xFF); // lengthSizeMinusOne (4 bytes)
+    writeU8(avcC, 0xE1); // numOfSequenceParameterSets
+    writeU16(avcC, m_sps.size());
+    avcC.insert(avcC.end(), m_sps.begin(), m_sps.end());
+    writeU8(avcC, 1); // numOfPictureParameterSets
+    writeU16(avcC, m_pps.size());
+    avcC.insert(avcC.end(), m_pps.begin(), m_pps.end());
+
+    // stsd box
+    std::vector<uint8_t> stsd;
+    writeU32(stsd, 0); // size placeholder
+    stsd.insert(stsd.end(), {'s', 't', 's', 'd'});
+    writeU8(stsd, 0); // version
+    writeU8(stsd, 0); writeU8(stsd, 0); writeU8(stsd, 0); // flags
+    writeU32(stsd, 1); // entry_count
+
+    // avc1 sample entry
+    std::vector<uint8_t> avc1;
+    writeU32(avc1, 0); // size placeholder
+    avc1.insert(avc1.end(), {'a', 'v', 'c', '1'});
+    // reserved
+    for (int i = 0; i < 6; i++) writeU8(avc1, 0);
+    writeU16(avc1, 1); // data_reference_index
+    // pre_defined and reserved
+    for (int i = 0; i < 16; i++) writeU8(avc1, 0);
+    writeU16(avc1, m_width); // width
+    writeU16(avc1, m_height); // height
+    writeU32(avc1, 0x00480000); // horizresolution (72 dpi)
+    writeU32(avc1, 0x00480000); // vertresolution (72 dpi)
+    writeU32(avc1, 0); // reserved
+    writeU16(avc1, 1); // frame_count
+    // compressorname (32 bytes)
+    for (int i = 0; i < 32; i++) writeU8(avc1, 0);
+    writeU16(avc1, 0x0018); // depth
+    writeU16(avc1, 0xFFFF); // pre_defined
+
+    // avcC box
+    std::vector<uint8_t> avcCBox;
+    writeU32(avcCBox, avcC.size() + 8); // box size
+    avcCBox.insert(avcCBox.end(), {'a', 'v', 'c', 'C'});
+    avcCBox.insert(avcCBox.end(), avcC.begin(), avcC.end());
+    
+    avc1.insert(avc1.end(), avcCBox.begin(), avcCBox.end());
+    
+    // Update avc1 size
+    uint32_t avc1Size = avc1.size();
+    avc1[0] = (avc1Size >> 24) & 0xFF;
+    avc1[1] = (avc1Size >> 16) & 0xFF;
+    avc1[2] = (avc1Size >> 8) & 0xFF;
+    avc1[3] = avc1Size & 0xFF;
+    
+    stsd.insert(stsd.end(), avc1.begin(), avc1.end());
+    
+    // Update stsd size
+    uint32_t stsdSize = stsd.size();
+    stsd[0] = (stsdSize >> 24) & 0xFF;
+    stsd[1] = (stsdSize >> 16) & 0xFF;
+    stsd[2] = (stsdSize >> 8) & 0xFF;
+    stsd[3] = stsdSize & 0xFF;
+    
+    stbl.insert(stbl.end(), stsd.begin(), stsd.end());
+
+    // stts box (time-to-sample) - FIXED for multiple frames
+    std::vector<uint8_t> stts;
+    writeU32(stts, 24); // box size
+    stts.insert(stts.end(), {'s', 't', 't', 's'});
+    writeU8(stts, 0); // version
+    writeU8(stts, 0); writeU8(stts, 0); writeU8(stts, 0); // flags
+    writeU32(stts, 1); // entry_count (one entry for all frames)
+    writeU32(stts, m_frameCount); // sample_count
+    writeU32(stts, 1000); // sample_delta (1 second per frame)
+    
+    stbl.insert(stbl.end(), stts.begin(), stts.end());
+
+    // stss box (sync sample) - all frames keyframes
+    std::vector<uint8_t> stss;
+    writeU32(stss, 16 + m_frameCount * 4); // box size
+    stss.insert(stss.end(), {'s', 't', 's', 's'});
+    writeU8(stss, 0); // version
+    writeU8(stss, 0); writeU8(stss, 0); writeU8(stss, 0); // flags
+    writeU32(stss, m_frameCount); // entry_count
+    for (uint32_t i = 0; i < m_frameCount; i++) {
+        writeU32(stss, i + 1); // sample_number (1-based)
+    }
+    
+    stbl.insert(stbl.end(), stss.begin(), stss.end());
+
+    // stsc box (sample-to-chunk) - FIXED: each sample in separate chunk
+    std::vector<uint8_t> stsc;
+    writeU32(stsc, 16 + m_frameCount * 12); // box size
+    stsc.insert(stsc.end(), {'s', 't', 's', 'c'});
+    writeU8(stsc, 0); // version
+    writeU8(stsc, 0); writeU8(stsc, 0); writeU8(stsc, 0); // flags
+    writeU32(stsc, m_frameCount); // entry_count
+    for (uint32_t i = 0; i < m_frameCount; i++) {
+        writeU32(stsc, i + 1); // first_chunk
+        writeU32(stsc, 1); // samples_per_chunk
+        writeU32(stsc, 1); // sample_description_index
+    }
+    
+    stbl.insert(stbl.end(), stsc.begin(), stsc.end());
+
+    // stsz box (sample sizes) - FIXED for multiple frames
+    std::vector<uint8_t> stsz;
+    writeU32(stsz, 20 + m_frameCount * 4); // box size
+    stsz.insert(stsz.end(), {'s', 't', 's', 'z'});
+    writeU8(stsz, 0); // version
+    writeU8(stsz, 0); writeU8(stsz, 0); writeU8(stsz, 0); // flags
+    writeU32(stsz, 0); // sample_size (0 = variable sizes)
+    writeU32(stsz, m_frameCount); // sample_count
+    
+    // Add sizes of each frame
+    for (const auto& frame : m_frames) {
+        writeU32(stsz, frame.size);
+    }
+    
+    stbl.insert(stbl.end(), stsz.begin(), stsz.end());
+
+    // stco box (chunk offsets) - FIXED: offset for each chunk
+    std::vector<uint8_t> stco;
+    writeU32(stco, 16 + m_frameCount * 4); // box size
+    stco.insert(stco.end(), {'s', 't', 'c', 'o'});
+    writeU8(stco, 0); // version
+    writeU8(stco, 0); writeU8(stco, 0); writeU8(stco, 0); // flags
+    writeU32(stco, m_frameCount); // entry_count
+    
+    // Calculate offset for each frame
+    for (const auto& frame : m_frames) {
+        writeU32(stco, frame.offset);
+    }
+    
+    stbl.insert(stbl.end(), stco.begin(), stco.end());
+
+    // Update stbl size
+    uint32_t stblSize = stbl.size();
+    stbl[0] = (stblSize >> 24) & 0xFF;
+    stbl[1] = (stblSize >> 16) & 0xFF;
+    stbl[2] = (stblSize >> 8) & 0xFF;
+    stbl[3] = stblSize & 0xFF;
+    
+    minf.insert(minf.end(), stbl.begin(), stbl.end());
+
+    // Update minf size
+    uint32_t minfSize = minf.size();
+    minf[0] = (minfSize >> 24) & 0xFF;
+    minf[1] = (minfSize >> 16) & 0xFF;
+    minf[2] = (minfSize >> 8) & 0xFF;
+    minf[3] = minfSize & 0xFF;
+    
+    mdia.insert(mdia.end(), minf.begin(), minf.end());
+
+    // Update mdia size
+    uint32_t mdiaSize = mdia.size();
+    mdia[0] = (mdiaSize >> 24) & 0xFF;
+    mdia[1] = (mdiaSize >> 16) & 0xFF;
+    mdia[2] = (mdiaSize >> 8) & 0xFF;
+    mdia[3] = mdiaSize & 0xFF;
+    
+    trak.insert(trak.end(), mdia.begin(), mdia.end());
+
+    // Update trak size
+    uint32_t trakSize = trak.size();
+    trak[0] = (trakSize >> 24) & 0xFF;
+    trak[1] = (trakSize >> 16) & 0xFF;
+    trak[2] = (trakSize >> 8) & 0xFF;
+    trak[3] = trakSize & 0xFF;
+    
+    moov.insert(moov.end(), trak.begin(), trak.end());
+
+    // Update moov size
+    uint32_t moovSize = moov.size();
+    moov[0] = (moovSize >> 24) & 0xFF;
+    moov[1] = (moovSize >> 16) & 0xFF;
+    moov[2] = (moovSize >> 8) & 0xFF;
+    moov[3] = moovSize & 0xFF;
+    
+    return moov;
 } 
