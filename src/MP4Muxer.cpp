@@ -147,7 +147,7 @@ bool MP4Muxer::finalize() {
     if (m_frameCount >= 1 && !m_frames.empty()) {
         // Create proper moov box for all frames
         std::vector<uint8_t> finalMoov = createMultiFrameMoovBox();
-        if (!finalMoov.empty() && finalMoov.size() <= 8192) { // Check if fits in placeholder
+        if (!finalMoov.empty() && finalMoov.size() <= 16384) { // Check if fits in placeholder
             // Seek to moov placeholder position and overwrite it
             off_t originalPos = lseek(m_fd, 0, SEEK_CUR); // Save current position
             if (lseek(m_fd, m_moovStartPos, SEEK_SET) != -1) {
@@ -156,7 +156,7 @@ bool MP4Muxer::finalize() {
                     LOG(INFO) << "[MP4Muxer] Updated moov box at position " << m_moovStartPos << ": " << finalMoov.size() << " bytes";
                     
                     // Zero out remaining placeholder space
-                    size_t remainingSpace = 8192 - finalMoov.size();
+                    size_t remainingSpace = 16384 - finalMoov.size();
                     if (remainingSpace > 0) {
                         std::vector<uint8_t> zeros(remainingSpace, 0);
                         write(m_fd, zeros.data(), zeros.size());
@@ -171,7 +171,7 @@ bool MP4Muxer::finalize() {
                 LOG(ERROR) << "[MP4Muxer] Failed to seek to moov position: " << strerror(errno);
             }
         } else {
-            LOG(ERROR) << "[MP4Muxer] Moov box too large (" << finalMoov.size() << " bytes) for placeholder (8192 bytes)";
+            LOG(ERROR) << "[MP4Muxer] Moov box too large (" << finalMoov.size() << " bytes) for placeholder (16384 bytes)";
         }
     }
     
@@ -638,13 +638,13 @@ bool MP4Muxer::writeMP4Header() {
     // 2. PLACEHOLDER moov box (will be updated in finalize())
     m_moovStartPos = mp4Header.size();  // Save moov position
     
-    // Reserve space for moov (estimate ~8KB)
-    std::vector<uint8_t> placeholderMoov(8192, 0); // 8KB placeholder
+    // Reserve space for moov (estimate ~16KB for multi-frame videos)
+    std::vector<uint8_t> placeholderMoov(16384, 0); // 16KB placeholder
     // Write minimal moov header
-    placeholderMoov[0] = (8192 >> 24) & 0xFF;
-    placeholderMoov[1] = (8192 >> 16) & 0xFF; 
-    placeholderMoov[2] = (8192 >> 8) & 0xFF;
-    placeholderMoov[3] = 8192 & 0xFF;
+    placeholderMoov[0] = (16384 >> 24) & 0xFF;
+    placeholderMoov[1] = (16384 >> 16) & 0xFF; 
+    placeholderMoov[2] = (16384 >> 8) & 0xFF;
+    placeholderMoov[3] = 16384 & 0xFF;
     placeholderMoov[4] = 'm';
     placeholderMoov[5] = 'o';
     placeholderMoov[6] = 'o';
@@ -660,7 +660,7 @@ bool MP4Muxer::writeMP4Header() {
     // Write header to file
     writeToFile(mp4Header.data(), mp4Header.size());
     
-    LOG(INFO) << "[MP4Muxer] MP4 header written: " << mp4Header.size() << " bytes (ftyp + placeholder moov + mdat start)";
+    LOG(INFO) << "[MP4Muxer] MP4 header written: " << mp4Header.size() << " bytes (ftyp + 16KB placeholder moov + mdat start)";
     return true;
 }
 
