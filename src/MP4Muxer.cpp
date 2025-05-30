@@ -949,8 +949,13 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     moov[2] = (moovSize >> 8) & 0xFF;
     moov[3] = moovSize & 0xFF;
     
-    return moov;
+    moov[2] = (moovSize >> 8) & 0xFF;
+    moov[3] = moovSize & 0xFF;
     
+    mp4Data.insert(mp4Data.end(), moov.begin(), moov.end());
+    
+    LOG(DEBUG) << "[MP4Muxer] MP4 snapshot created: " << mp4Data.size() << " bytes";
+    return mp4Data;
 }
 
 // Static debug method for H264 data analysis (moved from SnapshotManager)
