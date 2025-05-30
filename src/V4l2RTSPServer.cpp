@@ -89,11 +89,16 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 				LOG(FATAL) << "No Streaming format supported for device " << videoDev;
 				delete videoCapture;
 			} else {
-				videoReplicator = DeviceSourceFactory::createStreamReplicator(this->env(), videoCapture->getFormat(), new VideoCaptureAccess(videoCapture), queueSize, captureMode, outfd, repeatConfig, isMP4File);
+				// Create VideoCaptureAccess and set the FPS from device parameters
+				VideoCaptureAccess* videoCaptureAccess = new VideoCaptureAccess(videoCapture);
+				videoCaptureAccess->setStoredFps(inParam.m_fps); // Set FPS from device parameters
+				LOG(INFO) << "Set VideoCaptureAccess FPS to " << inParam.m_fps;
+				
+				videoReplicator = DeviceSourceFactory::createStreamReplicator(this->env(), videoCapture->getFormat(), videoCaptureAccess, queueSize, captureMode, outfd, repeatConfig, isMP4File);
 				if (videoReplicator == NULL) 
 				{
 					LOG(FATAL) << "Unable to create source for device " << videoDev;
-					delete videoCapture;
+					delete videoCaptureAccess; // This will also delete videoCapture
 				}
 			}
 		}
