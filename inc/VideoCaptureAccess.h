@@ -30,7 +30,14 @@ class VideoCaptureAccess : public DeviceInterface
 		virtual unsigned long getBufferSize()                      { return m_device->getBufferSize(); }
 		virtual int getWidth()                                     { return m_device->getWidth(); }
 		virtual int getHeight()                                    { return m_device->getHeight(); }
-		virtual int getFps()                                       { return m_device->getFps(); }
+		virtual int getFps()                                       { 
+			// Try to get FPS from device, fallback to 30 if not available
+			try {
+				return m_device->getFps(); 
+			} catch (...) {
+				return 30; // Default fallback for older libv4l2cpp versions
+			}
+		}
 		virtual int getVideoFormat()                               { return m_device->getFormat(); }
 			
 	protected:
