@@ -115,6 +115,34 @@ bool MP4Muxer::finalize() {
         LOG(INFO) << "[MP4Muxer] Forced data sync to disk";
     }
     
+    // CRITICAL: Fix mdat size before writing moov
+    if (m_mdatStartPos > 0) {
+        // Calculate actual mdat size: current position - start of mdat box
+        uint32_t actualMdatSize = m_currentPos - m_mdatStartPos + 8; // +8 for mdat header
+        
+        // Seek to mdat size field and update it
+        off_t originalPos = lseek(m_fd, 0, SEEK_CUR); // Save current position
+        if (lseek(m_fd, m_mdatStartPos, SEEK_SET) != -1) {
+            // Write correct mdat size (big-endian)
+            uint8_t sizeBytes[4] = {
+                static_cast<uint8_t>((actualMdatSize >> 24) & 0xFF),
+                static_cast<uint8_t>((actualMdatSize >> 16) & 0xFF),
+                static_cast<uint8_t>((actualMdatSize >> 8) & 0xFF),
+                static_cast<uint8_t>(actualMdatSize & 0xFF)
+            };
+            if (write(m_fd, sizeBytes, 4) == 4) {
+                LOG(INFO) << "[MP4Muxer] Fixed mdat size: " << actualMdatSize << " bytes";
+            } else {
+                LOG(ERROR) << "[MP4Muxer] Failed to update mdat size: " << strerror(errno);
+            }
+            
+            // Return to end of file
+            lseek(m_fd, originalPos, SEEK_SET);
+        } else {
+            LOG(ERROR) << "[MP4Muxer] Failed to seek to mdat position: " << strerror(errno);
+        }
+    }
+    
     // FIXED version: create proper moov box at the end of file
     if (m_frameCount >= 1 && !m_frames.empty()) {
         // Create proper moov box for all frames (including single frame)
