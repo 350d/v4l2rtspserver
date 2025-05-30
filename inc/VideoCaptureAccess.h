@@ -30,6 +30,7 @@ class VideoCaptureAccess : public DeviceInterface
 		virtual unsigned long getBufferSize()                      { return m_device->getBufferSize(); }
 		virtual int getWidth()                                     { return m_device->getWidth(); }
 		virtual int getHeight()                                    { return m_device->getHeight(); }
+		virtual int getFps()                                       { return m_device->getFps(); }
 		virtual int getVideoFormat()                               { return m_device->getFormat(); }
 			
 	protected:
