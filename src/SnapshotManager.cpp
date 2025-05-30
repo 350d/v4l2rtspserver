@@ -505,10 +505,10 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         LOG(ERROR) << "[H264] Failed to create MP4 snapshot using MP4Muxer";
         return;
     }
-
+    
     // Store as snapshot
     {
-        std::lock_guard<std::mutex> lock(m_snapshotMutex);
+    std::lock_guard<std::mutex> lock(m_snapshotMutex);
         m_snapshotData = mp4Data;
         m_snapshotMimeType = "video/mp4";
         m_lastSnapshotTime = std::time(nullptr);

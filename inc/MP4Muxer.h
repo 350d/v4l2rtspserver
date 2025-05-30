@@ -67,6 +67,12 @@ private:
     void write8(std::vector<uint8_t>& vec, uint8_t value);
     void writeToFile(const void* data, size_t size);
     
+    // MP4 structure creation helpers (refactored to avoid duplication)
+    static std::vector<uint8_t> createFtypBox();
+    static std::vector<uint8_t> createMinimalMoovBox();
+    static std::vector<uint8_t> createMdatBox(const std::string& sps, const std::string& pps, 
+                                              const unsigned char* h264Data, size_t dataSize);
+    
     // MP4 structure creation (moved from SnapshotManager)
     bool writeMP4Header();
     std::pair<int, int> parseSPSDimensions(const std::string& sps);
