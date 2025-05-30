@@ -96,11 +96,23 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 			outputBuffer.insert(outputBuffer.end(), H264marker, H264marker + 4);
 			outputBuffer.insert(outputBuffer.end(), buffer, buffer + size);
 			
-			// For MP4 muxer, store individual frame data
-			if (m_isMP4 && frameType == 5) { // IDR frame
-				// Store frame data for MP4 muxer (will be used after the loop)
-				m_currentFrameData.assign(buffer, buffer + size);
-				m_currentFrameIsKeyframe = true;
+			// For MP4 muxer, store ALL frame data (not just keyframes/P/B-frames)
+			if (m_isMP4) {
+				// Store frame data for MP4 muxer - ALL frames for complete stream
+				if (frameType == 5) { // IDR frame (keyframe)
+					m_currentFrameData.assign(buffer, buffer + size);
+					m_currentFrameIsKeyframe = true;
+				} else if (frameType == 1 || frameType == 2) { // P-frame or B-frame
+					m_currentFrameData.assign(buffer, buffer + size);
+					m_currentFrameIsKeyframe = false;
+				} else if (frameType != 7 && frameType != 8) { 
+					// Include ALL other frame types except SPS/PPS (handled separately)
+					// This includes: slice types 6,9,10,11,12 etc for complete stream
+					m_currentFrameData.assign(buffer, buffer + size);
+					m_currentFrameIsKeyframe = false;
+					LOG(DEBUG) << "Adding non-standard frame type " << frameType << " to MP4 stream";
+				}
+				// SPS/PPS frames (7,8) are handled separately via initialize()
 			}
 		}
 		
@@ -131,38 +143,37 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	// Write properly formatted H264 data to output file
 	if (m_outfd != -1 && !outputBuffer.empty()) {
 		if (m_isMP4) {
-			// For MP4 output: create snapshot-style MP4 for each keyframe
-			if (hasKeyFrame && !m_sps.empty() && !m_pps.empty() && !m_currentFrameData.empty()) {
-				// Get frame dimensions
+			// Initialize MP4 muxer on first keyframe for STREAMING (not snapshots)
+			if (hasKeyFrame && !m_sps.empty() && !m_pps.empty() && !m_mp4Muxer) {
+				m_mp4Muxer = new MP4Muxer();
 				int frameWidth = (m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920;
 				int frameHeight = (m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080;
 				
-				// Create complete MP4 snapshot for this keyframe using the fixed createMP4Snapshot
-				std::vector<uint8_t> mp4Data = MP4Muxer::createMP4Snapshot(
-					m_currentFrameData.data(), m_currentFrameData.size(),
-					m_sps, m_pps, frameWidth, frameHeight
-				);
-				
-				if (!mp4Data.empty()) {
-					// Write the complete MP4 snapshot to file (overwrites previous content)
-					lseek(m_outfd, 0, SEEK_SET); // Reset to beginning
-					ftruncate(m_outfd, 0); // Clear file
-					int written = write(m_outfd, mp4Data.data(), mp4Data.size());
-					if (written == (int)mp4Data.size()) {
-						LOG(INFO) << "MP4 keyframe snapshot written: " << written << " bytes";
-					} else {
-						LOG(ERROR) << "MP4 write error: " << written << "/" << mp4Data.size() << " err:" << strerror(errno);
-					}
+				if (!m_mp4Muxer->initialize(m_outfd, m_sps, m_pps, frameWidth, frameHeight)) {
+					LOG(ERROR) << "Failed to initialize MP4 muxer for streaming";
+					delete m_mp4Muxer;
+					m_mp4Muxer = nullptr;
+					m_isMP4 = false; // Fall back to raw H264
 				} else {
-					LOG(ERROR) << "Failed to create MP4 snapshot";
-					// Fallback to raw H264
-					int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
-					if (written != (int)outputBuffer.size()) {
-						LOG(NOTICE) << "H264 fallback write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
-					}
+					LOG(INFO) << "MP4 streaming muxer initialized successfully";
 				}
 			}
-			// For non-keyframes in MP4 mode, we skip writing (single keyframe snapshot mode)
+			
+			// Add frame to MP4 muxer for CONTINUOUS STREAMING
+			if (m_mp4Muxer && m_mp4Muxer->isInitialized()) {
+				// Add ALL frames (keyframes and non-keyframes) for full stream
+				if (!m_currentFrameData.empty()) {
+					m_mp4Muxer->addFrame(m_currentFrameData.data(), m_currentFrameData.size(), m_currentFrameIsKeyframe);
+					LOG(DEBUG) << "Added frame to MP4 stream: " << m_currentFrameData.size() 
+					          << " bytes" << (m_currentFrameIsKeyframe ? " (keyframe)" : "");
+				}
+			} else if (!m_mp4Muxer) {
+				// If muxer not ready, write raw H264 as fallback
+				int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
+				if (written != (int)outputBuffer.size()) {
+					LOG(NOTICE) << "H264 fallback write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
+				}
+			}
 		} else {
 			// Raw H264 format
 			int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
