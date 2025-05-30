@@ -39,6 +39,9 @@ public:
     // Check if muxer is initialized
     bool isInitialized() const { return m_initialized; }
     
+    // Get file descriptor for sync operations
+    int getFileDescriptor() const { return m_fd; }
+    
     // Static method for creating MP4 snapshot in memory (for SnapshotManager)
     static std::vector<uint8_t> createMP4Snapshot(const unsigned char* h264Data, size_t dataSize,
                                                    const std::string& sps, const std::string& pps,

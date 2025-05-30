@@ -177,18 +177,15 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 					LOG(DEBUG) << "Added frame to MP4 stream: " << m_currentFrameData.size() 
 					          << " bytes" << (m_currentFrameIsKeyframe ? " (keyframe)" : "");
 					
-					// CRITICAL: Periodic finalization to prevent data loss
+					// CRITICAL: Periodic sync to prevent data loss (but NOT finalization)
 					static int frameCounter = 0;
 					frameCounter++;
 					if (frameCounter % 50 == 0) {
-						LOG(INFO) << "[MP4Muxer] Periodic finalization after " << frameCounter << " frames";
-						m_mp4Muxer->finalize();
-						// Re-initialize for continued streaming
-						int frameFps = (m_device && m_device->getFps() > 0) ? m_device->getFps() : 30;  // Get FPS from camera
-						if (!m_mp4Muxer->initialize(m_outfd, m_sps, m_pps, 
-								(m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920,
-								(m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080, frameFps)) {
-							LOG(ERROR) << "Failed to re-initialize MP4 muxer after periodic finalization";
+						LOG(INFO) << "[MP4Muxer] Periodic sync after " << frameCounter << " frames";
+						// Just sync data to disk, don't finalize the file
+						if (m_mp4Muxer->getFileDescriptor() != -1) {
+							fsync(m_mp4Muxer->getFileDescriptor());
+							LOG(DEBUG) << "[MP4Muxer] Synced data to disk";
 						}
 					}
 				}
