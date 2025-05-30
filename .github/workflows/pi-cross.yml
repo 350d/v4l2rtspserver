@@ -96,18 +96,32 @@ jobs:
       uses: actions/cache@v4
       with:
         path: |
-          /var/cache/apt/archives
-          /var/lib/apt/lists
-        key: apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v4-${{ hashFiles('/etc/apt/sources.list', '/etc/apt/sources.list.d/*') }}
+          ~/apt-cache/archives
+          ~/apt-cache/lists
+        key: apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v5-${{ hashFiles('/etc/apt/sources.list', '/etc/apt/sources.list.d/*') }}
         restore-keys: |
-          apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v4-
+          apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-v5-
           apt-cache-${{ matrix.config.arch }}-${{ runner.os }}-
 
     - name: 🛠️ Install Cross-Compilation Tools
       run: |
+        # Create user-owned cache directories
+        mkdir -p ~/apt-cache/archives ~/apt-cache/lists
+        
         # Clean any existing problematic cache files first
         sudo rm -rf /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/cache/apt/archives/partial
         sudo rm -f /var/lib/apt/lists/*microsoft* 2>/dev/null || true
+        
+        # Restore cached packages if available
+        if [ -d ~/apt-cache/archives ] && [ "$(ls -A ~/apt-cache/archives)" ]; then
+          echo "🔄 Restoring cached APT packages..."
+          sudo cp -r ~/apt-cache/archives/* /var/cache/apt/archives/ 2>/dev/null || true
+        fi
+        
+        if [ -d ~/apt-cache/lists ] && [ "$(ls -A ~/apt-cache/lists)" ]; then
+          echo "🔄 Restoring cached APT lists..."
+          sudo cp -r ~/apt-cache/lists/* /var/lib/apt/lists/ 2>/dev/null || true
+        fi
         
         # Single apt-get update + install to reduce redundant updates
         echo "📦 Installing cross-compilation tools for ${{ matrix.config.arch }}..."
@@ -147,6 +161,14 @@ jobs:
         
         # Clean up but preserve architecture-specific files
         sudo apt-get autoclean
+        
+        # Save packages to user cache
+        echo "💾 Saving APT packages to cache..."
+        sudo cp -r /var/cache/apt/archives/* ~/apt-cache/archives/ 2>/dev/null || true
+        sudo cp -r /var/lib/apt/lists/* ~/apt-cache/lists/ 2>/dev/null || true
+        
+        # Fix ownership of cached files
+        sudo chown -R $USER:$USER ~/apt-cache/ 2>/dev/null || true
         
         # Ensure cache directory permissions are correct
         sudo chmod -R 755 /var/cache/apt/archives 2>/dev/null || true
