@@ -1196,7 +1196,7 @@ std::vector<uint8_t> MP4Muxer::createMultiFrameMoovBox() {
     writeU8(mvhd, 0); writeU8(mvhd, 0); writeU8(mvhd, 0); // flags
     writeU32(mvhd, 0); // creation_time
     writeU32(mvhd, 0); // modification_time
-    writeU32(mvhd, 1000); // timescale
+    writeU32(mvhd, m_fps * 1000); // timescale (dynamic fps)
     writeU32(mvhd, m_frameCount * 1000); // duration (frameCount seconds at 1fps)
     writeU32(mvhd, 0x00010000); // rate (1.0)
     writeU16(mvhd, 0x0100); // volume (1.0)
