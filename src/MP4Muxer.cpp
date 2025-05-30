@@ -262,7 +262,7 @@ std::vector<uint8_t> MP4Muxer::createVideoTrackMoovBox(const std::string& sps, c
     writeU8(moov, 0); writeU8(moov, 0); writeU8(moov, 0); // flags
     writeU32(moov, 0); // creation_time
     writeU32(moov, 0); // modification_time
-    writeU32(moov, m_fps * 1000); // timescale (dynamic fps instead of hardcoded 1000)
+    writeU32(moov, fps * 1000); // timescale (fps * 1000 per second)
     writeU32(moov, frameCount * 1000); // duration (frameCount * 1000 units at fps*1000 timescale)
     writeU32(moov, 0x00010000); // rate (1.0)
     writeU16(moov, 0x0100); // volume (1.0)
@@ -686,8 +686,8 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     writeU8(mvhd, 0); writeU8(mvhd, 0); writeU8(mvhd, 0); // flags
     writeU32(mvhd, 0); // creation_time
     writeU32(mvhd, 0); // modification_time
-    writeU32(mvhd, m_fps * 1000); // timescale (dynamic fps instead of hardcoded 1000)
-    writeU32(mvhd, m_frameCount * 1000); // duration (frameCount seconds at proper fps)
+    writeU32(mvhd, fps * 1000); // timescale (fps * 1000 per second)
+    writeU32(mvhd, 1 * 1000); // duration (1 frame * 1000 units at fps*1000 timescale)
     writeU32(mvhd, 0x00010000); // rate (1.0)
     writeU16(mvhd, 0x0100); // volume (1.0)
     writeU16(mvhd, 0); // reserved
@@ -745,7 +745,7 @@ std::vector<uint8_t> MP4Muxer::createMP4Snapshot(const unsigned char* h264Data, 
     writeU8(mdhd, 0); writeU8(mdhd, 0); writeU8(mdhd, 0); // flags
     writeU32(mdhd, 0); // creation_time
     writeU32(mdhd, 0); // modification_time
-    writeU32(mdhd, m_fps * 1000); // timescale (dynamic fps)
+    writeU32(mdhd, fps * 1000); // timescale (fps * 1000 per second)
     writeU32(mdhd, 1 * 1000); // duration (1 frame * 1000 units at fps*1000 timescale)
     writeU16(mdhd, 0x55c4); // language (und)
     writeU16(mdhd, 0); // pre_defined
