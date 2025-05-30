@@ -21,6 +21,7 @@
 #include <dirent.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <unistd.h>  // for fsync()
 
 #include <sstream>
 #include <vector>
@@ -52,10 +53,32 @@
 // -----------------------------------------
 char quit = 0;
 
+// Global list to track active MP4 output file descriptors for proper finalization
+static std::list<int> g_mp4OutputFds;
+
+// Function to register MP4 file descriptor (called from V4l2RTSPServer)
+extern "C" void registerMP4FileDescriptor(int fd) {
+	if (fd != -1) {
+		g_mp4OutputFds.push_back(fd);
+		printf("Registered MP4 file descriptor %d for finalization\n", fd);
+	}
+}
+
 void sighandler(int n)
 { 
 	printf("SIGINT\n");
-	quit =1;
+	
+	// CRITICAL: Force finalize MP4 files before exit to prevent data loss
+	// Since destructors may not be called on SIGINT, we need to manually sync/close
+	for (int fd : g_mp4OutputFds) {
+		if (fd != -1) {
+			printf("Force syncing MP4 file descriptor %d before exit\n", fd);
+			fsync(fd);  // Force flush data to disk
+			// Note: Don't close here as it may be closed by destructors
+		}
+	}
+	
+	quit = 1;
 }
 
 // -------------------------------------------------------

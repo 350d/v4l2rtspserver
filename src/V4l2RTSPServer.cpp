@@ -28,6 +28,9 @@
 #include "ALSACapture.h"
 #endif
 
+// External function from main.cpp for MP4 finalization on SIGINT
+extern "C" void registerMP4FileDescriptor(int fd);
+
 StreamReplicator* V4l2RTSPServer::CreateVideoReplicator( 
 					const V4L2DeviceParameters& inParam,
 					int queueSize, V4L2DeviceSource::CaptureMode captureMode, int repeatConfig,
@@ -78,6 +81,11 @@ StreamReplicator* V4l2RTSPServer::CreateVideoReplicator(
 					outfd = open(outputFile.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
 					if (outfd != -1) {
 						LOG(INFO) << "Opened " << (isMP4File ? "MP4" : "regular") << " file for output: " << outputFile << " fd:" << outfd;
+						
+						// Register MP4 file descriptor for proper finalization on SIGINT
+						if (isMP4File) {
+							registerMP4FileDescriptor(outfd);
+						}
 					} else {
 						LOG(WARN) << "Cannot open output:" << outputFile << " err:" << strerror(errno);
 					}
