@@ -550,8 +550,8 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     }
     
     // H264 frame
-    write32(mdat, h264Size);
-    mdat.insert(mdat.end(), h264Data, h264Data + h264Size);
+    write32(mdat, dataSize);
+    mdat.insert(mdat.end(), h264Data, h264Data + dataSize);
     
     // Update mdat size
     uint32_t mdatSize = mdat.size();
@@ -807,7 +807,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
     stsz.insert(stsz.end(), {'s', 't', 's', 'z'});
     write8(stsz, 0); // version
     write8(stsz, 0); write8(stsz, 0); write8(stsz, 0); // flags
-    write32(stsz, sps.size() + 4 + pps.size() + 4 + h264Size + 4); // sample_size
+    write32(stsz, sps.size() + 4 + pps.size() + 4 + dataSize + 4); // sample_size
     write32(stsz, 1); // sample_count
     
     stbl.insert(stbl.end(), stsz.begin(), stsz.end());
@@ -877,7 +877,7 @@ void SnapshotManager::createH264Snapshot(const unsigned char* h264Data, size_t h
         m_lastSnapshotTimePoint = std::chrono::steady_clock::now();
         
         // Cache the frame data and SPS/PPS for future use
-        m_lastH264Frame.assign(h264Data, h264Data + h264Size);
+        m_lastH264Frame.assign(h264Data, h264Data + dataSize);
         if (!sps.empty()) m_lastSPS = sps;
         if (!pps.empty()) m_lastPPS = pps;
         m_lastFrameWidth = width;
@@ -1612,7 +1612,7 @@ void SnapshotManager::writeMP4ToFile(int fd, const unsigned char* h264Data, size
     }
     
     // H264 frame
-    write32(mdat, h264Data.size());
+    write32(mdat, dataSize);
     mdat.insert(mdat.end(), h264Data, h264Data + dataSize);
     
     // Update mdat size
