@@ -64,6 +64,9 @@ extern "C" void registerMP4FileDescriptor(int fd) {
 	}
 }
 
+// External function for emergency MP4 finalization
+extern "C" void forceFinalizeMp4Files();
+
 void sighandler(int n)
 { 
 	printf("SIGINT\n");
@@ -77,6 +80,9 @@ void sighandler(int n)
 			// Note: Don't close here as it may be closed by destructors
 		}
 	}
+	
+	// EMERGENCY: Force finalize MP4 muxers since destructors won't be called
+	forceFinalizeMp4Files();
 	
 	quit = 1;
 }

@@ -25,6 +25,21 @@
 // Simple finalization on exit for MP4 files
 static bool g_forceFinalize = false;
 
+// Global list of active MP4Muxers for signal handling
+static std::vector<MP4Muxer*> g_activeMuxers;
+
+// External function callable from main.cpp sighandler
+extern "C" void forceFinalizeMp4Files() {
+	printf("[MP4 Emergency Finalize] Finalizing %zu active MP4 files\n", g_activeMuxers.size());
+	for (auto muxer : g_activeMuxers) {
+		if (muxer && muxer->isInitialized()) {
+			printf("[MP4 Emergency Finalize] Finalizing MP4 muxer\n");
+			muxer->finalize();
+		}
+	}
+	g_activeMuxers.clear();
+}
+
 // ---------------------------------
 // H264 V4L2 FramedSource
 // ---------------------------------
@@ -170,6 +185,8 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 					m_isMP4 = false; // Fall back to raw H264
 				} else {
 					LOG(INFO) << "MP4 streaming muxer initialized successfully with FPS: " << frameFps;
+					// Register MP4Muxer for emergency finalization on SIGINT
+					g_activeMuxers.push_back(m_mp4Muxer);
 				}
 			}
 			
