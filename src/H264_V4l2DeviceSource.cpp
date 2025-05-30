@@ -20,13 +20,19 @@
 #include "H264_V4l2DeviceSource.h"
 #include "SnapshotManager.h"
 #include "MP4Muxer.h"
+#include "SimpleMP4Muxer.h"
 
 // ---------------------------------
 // H264 V4L2 FramedSource
 // ---------------------------------
 
 H264_V4L2DeviceSource::~H264_V4L2DeviceSource() {
+	// Finalize MP4 muxer if active
+	if (m_simpleMuxer && m_simpleMuxer->isInitialized()) {
+		m_simpleMuxer->finalize();
+	}
 	delete m_mp4Muxer;
+	delete m_simpleMuxer;
 }
 
 // split packet in frames					
@@ -42,6 +48,8 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	// For proper H264 output file writing
 	std::vector<unsigned char> outputBuffer;
 	bool hasKeyFrame = false;
+	m_currentFrameData.clear();
+	m_currentFrameIsKeyframe = false;
 	
 	while (buffer != NULL)				
 	{	
@@ -89,6 +97,13 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 		if (m_outfd != -1) {
 			outputBuffer.insert(outputBuffer.end(), H264marker, H264marker + 4);
 			outputBuffer.insert(outputBuffer.end(), buffer, buffer + size);
+			
+			// For MP4 muxer, store individual frame data
+			if (m_isMP4 && frameType == 5) { // IDR frame
+				// Store frame data for MP4 muxer (will be used after the loop)
+				m_currentFrameData.assign(buffer, buffer + size);
+				m_currentFrameIsKeyframe = true;
+			}
 		}
 		
 		if (!m_sps.empty() && !m_pps.empty())
@@ -118,23 +133,43 @@ std::list< std::pair<unsigned char*,size_t> > H264_V4L2DeviceSource::splitFrames
 	// Write properly formatted H264 data to output file
 	if (m_outfd != -1 && !outputBuffer.empty()) {
 		if (m_isMP4) {
-			// TODO: Implement proper MP4 muxer for streaming
-			// For now, write raw H264 and suggest conversion to avoid file size issues
-			static bool warningShown = false;
-			if (!warningShown) {
-				LOG(WARN) << "MP4 streaming not fully implemented, writing raw H264 to avoid performance issues.";
-				LOG(WARN) << "Convert to MP4 with: ffmpeg -i output_file -c copy output_file.mp4";
-				warningShown = true;
+			// Initialize MP4 muxer on first keyframe
+			if (hasKeyFrame && !m_sps.empty() && !m_pps.empty() && !m_simpleMuxer) {
+				m_simpleMuxer = new SimpleMP4Muxer();
+				int frameWidth = (m_device && m_device->getWidth() > 0) ? m_device->getWidth() : 1920;
+				int frameHeight = (m_device && m_device->getHeight() > 0) ? m_device->getHeight() : 1080;
+				
+				if (!m_simpleMuxer->initialize(m_outfd, m_sps, m_pps, frameWidth, frameHeight)) {
+					LOG(ERROR) << "Failed to initialize MP4 muxer";
+					delete m_simpleMuxer;
+					m_simpleMuxer = nullptr;
+					m_isMP4 = false; // Fall back to raw H264
+				} else {
+					LOG(INFO) << "MP4 muxer initialized successfully";
+				}
 			}
-			// Fall back to raw H264 format for efficiency
-		}
-		
-		// Raw H264 format (both for .h264 files and .mp4 fallback)
-		int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
-		if (written != (int)outputBuffer.size()) {
-			LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
-		} else if (hasKeyFrame) {
-			LOG(DEBUG) << "H264 keyframe written to output: " << written << " bytes";
+			
+			// Add frame to MP4 muxer
+			if (m_simpleMuxer && m_simpleMuxer->isInitialized()) {
+				// Use stored frame data from loop
+				if (!m_currentFrameData.empty()) {
+					m_simpleMuxer->addFrame(m_currentFrameData.data(), m_currentFrameData.size(), m_currentFrameIsKeyframe);
+				}
+			} else if (!m_simpleMuxer) {
+				// If muxer not ready, write raw H264 as fallback
+				int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
+				if (written != (int)outputBuffer.size()) {
+					LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
+				}
+			}
+		} else {
+			// Raw H264 format
+			int written = write(m_outfd, outputBuffer.data(), outputBuffer.size());
+			if (written != (int)outputBuffer.size()) {
+				LOG(NOTICE) << "H264 output write error: " << written << "/" << outputBuffer.size() << " err:" << strerror(errno);
+			} else if (hasKeyFrame) {
+				LOG(DEBUG) << "H264 keyframe written to output: " << written << " bytes";
+			}
 		}
 	}
 	
